@@ -29,7 +29,7 @@ impl Url {
 
     // TODO:
     // Plan to do a second pass where I make the code more rustic
-    fn request(url: &Url) -> Result<TcpStream> {
+    fn request(url: &Url) -> std::io::Result<BufReader<TcpStream>> {
         let port = ":80";
         let address = url.host.clone() + port;
         let mut stream = TcpStream::connect(address)?;
@@ -62,13 +62,12 @@ impl Url {
             line.clear();
         }
 
-        Ok(reader.into_inner())
+        Ok(reader)
     }
 }
 
-fn show(stream: TcpStream) -> Result<()> {
+fn show(reader: &mut BufReader<TcpStream>) -> std::io::Result<()> {
     let mut body = String::new();
-    let mut reader = BufReader::new(stream);
 
     reader.read_to_string(&mut body)?;
     println!("HTML Body: {}", body);
@@ -76,9 +75,9 @@ fn show(stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-fn load(url: Url) -> Result<()> {
-    let body = Url::request(&url)?;
-    show(body)?;
+fn load(url: Url) -> std::io::Result<()> {
+    let mut reader = Url::request(&url)?;
+    show(&mut reader)?;
 
     Ok(())
 }
