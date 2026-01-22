@@ -35,9 +35,10 @@ impl Url {
         let mut stream = TcpStream::connect(address)?;
 
         let request = format!(
-            "GET /ip HTTP/1.0\r\n\
-         Host: {}\r\n\
-         \r\n",
+            "GET {} HTTP/1.0\r\n\
+     Host: {}\r\n\
+     \r\n",
+            if url.path.is_empty() { "/" } else { &url.path }, // Handle empty path
             url.host
         );
 
