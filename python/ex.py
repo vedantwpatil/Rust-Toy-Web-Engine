@@ -56,6 +56,10 @@ class Url:
         # for key, value in response_headers.items():
         #     print(f"Key: {key}\nValue: {value}")
 
+        body = response.read()
+        s.close()
+        return body
+
 
 def show(body):
     in_tag = False

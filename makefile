@@ -4,6 +4,7 @@
 # not files on disk. This prevents conflicts if you accidentally create
 # a file named "run-py" or "clean".
 .PHONY: all run-py run-rs clean help build-rs
+URL ?= https://browser.engineering/examples/example1-simple.html
 
 # Default shell logic (good practice for cross-platform consistency)
 SHELL := /bin/bash
@@ -15,23 +16,19 @@ all: help
 # Runs the interpreter directly on the script.
 run-py:
 	@echo "Running Python implementation..."
-	python3 python/main.py
+	python3 python/main.py "$(URL)"
 
 # Rust Targets (Low-Level / Compiled) 
 # We use --manifest-path to execute cargo from the root without 'cd'.
 # This keeps the shell environment stable.
 run-rs:
 	@echo "Building and Running Rust implementation..."
-	cargo run --manifest-path rust/Cargo.toml
+	cargo run --manifest-path rust/Cargo.toml -- "$(URL)"
 
 # Optimized build for benchmarking (removes debug symbols, enables vectorization)
 run-rs-release:
 	@echo "Running Rust in Release mode (Optimized)..."
-	cargo run --release --manifest-path rust/Cargo.toml
-
-# Explicit build step without running
-build-rs:
-	cargo build --manifest-path rust/Cargo.toml
+	cargo run --release --manifest-path rust/Cargo.toml -- "$(URL)"
 
 # Utilities 
 # clean: Removes build artifacts for both languages to free space.
