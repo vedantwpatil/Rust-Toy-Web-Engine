@@ -3,6 +3,8 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::args;
+use std::fs::File;
+use std::io::Cursor;
 use std::io::Result;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
@@ -28,6 +30,7 @@ fn get_tls_config() -> Arc<ClientConfig> {
 enum NetworkStream {
     Plain(TcpStream),
     Tls(Box<StreamOwned<rustls::ClientConnection, TcpStream>>),
+    File(std::fs::File),
 }
 
 impl Read for NetworkStream {
@@ -35,6 +38,7 @@ impl Read for NetworkStream {
         match self {
             Self::Plain(s) => s.read(buf),
             Self::Tls(s) => s.read(buf),
+            Self::File(s) => s.read(buf),
         }
     }
 }
@@ -44,6 +48,10 @@ impl Write for NetworkStream {
         match self {
             Self::Plain(s) => s.write(buf),
             Self::Tls(s) => s.write(buf),
+            Self::File(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Cannot write to read-only file request",
+            )),
         }
     }
 
@@ -51,6 +59,7 @@ impl Write for NetworkStream {
         match self {
             Self::Plain(s) => s.flush(),
             Self::Tls(s) => s.flush(),
+            Self::File(s) => s.flush(),
         }
     }
 }
@@ -74,12 +83,15 @@ impl Url {
         }
     }
 
-    // Originally was going to do a one to one converstion but ran into issues with internet protocols
-    // so there are slight modifications
-
-    // TODO:
-    // Plan to do another iteration on this where I make the code more rustic
+    // Originally was going to do a one to one converstion but ran into issues with internet protocols so there are slight modifications
     fn request(&self) -> std::io::Result<BufReader<NetworkStream>> {
+        if self.scheme == "file" {
+            println!("Opening local file: {}", self.path);
+            let file = File::open(&self.path)?;
+
+            return Ok(BufReader::new(NetworkStream::File(file)));
+        }
+
         let port = if self.scheme == "https" {
             ":443"
         } else {
