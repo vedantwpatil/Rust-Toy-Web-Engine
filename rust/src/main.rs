@@ -1,10 +1,14 @@
 use rustls::StreamOwned;
 use rustls::pki_types::ServerName;
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::env::args;
 use std::io::Result;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
+
+type HeaderMap = HashMap<Cow<'static, str>, String>;
 
 // This allows us to treat a Plain TCP stream and a TLS stream as the "same thing"
 enum NetworkStream {
@@ -94,14 +98,25 @@ impl Url {
 
         let mut reader = BufReader::new(stream);
 
-        let request = format!(
-            "GET {} HTTP/1.0\r\n\
-             Host: {}\r\n\
-             Connection: close\r\n\
-             \r\n",
+        let mut headers: HeaderMap = HashMap::new();
+        headers.insert("Host".into(), url.host.clone());
+        headers.insert("Connection".into(), "close".to_string());
+        headers.insert("User-Agent".into(), "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36".to_string());
+
+        // To upgrade this to 1.1 we need to include a user agent and a connection header
+        let mut request = format!(
+            "GET {} HTTP/1.0\r\n",
             if url.path.is_empty() { "/" } else { &url.path },
-            url.host
         );
+
+        for (key, value) in headers.iter() {
+            request.push_str(key);
+            request.push_str(": ");
+            request.push_str(value);
+            request.push_str("\r\n");
+        }
+
+        request.push_str("\r\n");
 
         reader.get_mut().write_all(request.as_bytes())?;
 
