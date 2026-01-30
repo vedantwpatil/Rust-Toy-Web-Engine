@@ -1,14 +1,28 @@
-use rustls::StreamOwned;
 use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::args;
 use std::io::Result;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 type HeaderMap = HashMap<Cow<'static, str>, String>;
+static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+
+fn get_tls_config() -> Arc<ClientConfig> {
+    TLS_CONFIG
+        .get_or_init(|| {
+            let root_store =
+                RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let config = ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+            Arc::new(config)
+        })
+        .clone()
+}
 
 // This allows us to treat a Plain TCP stream and a TLS stream as the "same thing"
 enum NetworkStream {
@@ -65,28 +79,22 @@ impl Url {
 
     // TODO:
     // Plan to do another iteration on this where I make the code more rustic
-    fn request(url: &Url) -> std::io::Result<BufReader<NetworkStream>> {
-        let port = if url.scheme == "https" { ":443" } else { ":80" };
-        let address = format!("{}{}", url.host, port);
+    fn request(&self) -> std::io::Result<BufReader<NetworkStream>> {
+        let port = if self.scheme == "https" {
+            ":443"
+        } else {
+            ":80"
+        };
+        let address = format!("{}{}", self.host, port);
 
         let tcp_stream = TcpStream::connect(&address)?;
 
         // Upgrade to TLS if possible
-        let stream = if url.scheme == "https" {
-            let root_store =
-                rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let stream = if self.scheme == "https" {
+            let server_name = ServerName::try_from(self.host.clone())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-
-            let rc_config = Arc::new(config);
-
-            let server_name = ServerName::try_from(url.host.clone()).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid DNS Name")
-            })?;
-
-            let client = rustls::ClientConnection::new(rc_config, server_name)
+            let client = ClientConnection::new(get_tls_config(), server_name)
                 .map_err(std::io::Error::other)?;
 
             // Wrap the TCP stream in TLS and return the Tls variant
@@ -96,29 +104,38 @@ impl Url {
             NetworkStream::Plain(tcp_stream)
         };
 
-        let mut reader = BufReader::new(stream);
+        let mut writer = BufWriter::new(stream);
 
-        let mut headers: HeaderMap = HashMap::new();
-        headers.insert("Host".into(), url.host.clone());
-        headers.insert("Connection".into(), "close".to_string());
-        headers.insert("User-Agent".into(), "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36".to_string());
+        // "write_fmt" is the streaming version of "format!"
+        write!(
+            writer,
+            "GET {} HTTP/1.1\r\n",
+            if self.path.is_empty() {
+                "/"
+            } else {
+                &self.path
+            }
+        )?;
 
-        // To upgrade this to 1.1 we need to include a user agent and a connection header
-        let mut request = format!(
-            "GET {} HTTP/1.0\r\n",
-            if url.path.is_empty() { "/" } else { &url.path },
-        );
+        // Note: Header is more efficient since we don't need lookups
+        let headers: Vec<(Cow<'static, str>, Cow<'_, str>)> = vec![
+            ("Host".into(), Cow::Borrowed(&self.host)),
+            ("Connection".into(), "close".into()),
+            ("User-Agent".into(), "RustBrowser/1.0".into()),
+        ];
 
-        for (key, value) in headers.iter() {
-            request.push_str(key);
-            request.push_str(": ");
-            request.push_str(value);
-            request.push_str("\r\n");
+        for (key, value) in headers {
+            write!(writer, "{}: {}\r\n", key, value)?;
         }
 
-        request.push_str("\r\n");
+        // End of Headers
+        write!(writer, "\r\n")?;
+        writer.flush()?;
 
-        reader.get_mut().write_all(request.as_bytes())?;
+        // READER: Unwrap the stream back out of BufWriter to pass to BufReader
+        // (This works because BufWriter::into_inner returns the inner stream)
+        let stream = writer.into_inner().map_err(|e| e.into_error())?;
+        let mut reader = BufReader::new(stream);
 
         let mut line = String::new();
         reader.read_line(&mut line)?;
