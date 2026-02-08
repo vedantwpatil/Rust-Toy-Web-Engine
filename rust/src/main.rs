@@ -1,17 +1,62 @@
+use eframe::egui;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::env::args;
 use std::fs::File;
-use std::io::Cursor;
 use std::io::Result;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, OnceLock};
 
-type HeaderMap = HashMap<Cow<'static, str>, String>;
 static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+
+struct BrowserApp {
+    url: String,
+    body: Vec<String>,
+}
+
+impl Default for BrowserApp {
+    fn default() -> Self {
+        BrowserApp {
+            url: "https://browser.engineering/graphics.html".to_owned(),
+            body: vec![
+                "<h1>Welcome</h1>".into(),
+                "<p>Browser Engineering</p>".into(),
+            ],
+        }
+    }
+}
+
+impl eframe::App for BrowserApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        egui::TopBottomPanel::top("chrome").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Url:");
+
+                if ui.text_edit_singleline(&mut self.url).lost_focus() {
+                    println!("Navigating to {}", self.url);
+                }
+
+                if ui.button("Refresh").clicked() {
+                    self.body.push("New Element".into());
+                }
+            });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Render Output");
+
+            let painter = ui.painter();
+
+            painter.rect_filled(
+                egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 50.0)),
+                0.0, // rounding
+                egui::Color32::from_rgb(200, 50, 50),
+            );
+        });
+    }
+}
 
 fn get_tls_config() -> Arc<ClientConfig> {
     TLS_CONFIG
@@ -184,21 +229,31 @@ fn load(url: &Url) -> std::io::Result<()> {
 
     Ok(())
 }
-fn main() -> Result<()> {
-    // Earlier previous debug/testing lines
-    // let url = Url::new("http://www.google.com/");
-    // let request = Url::request(&url);
-    // println!("{:?}", url);
-    // println!("{:?}\n", request);
 
-    let args: Vec<String> = args().collect();
-
-    if args.len() < 2 {
-        eprintln!("Usage: {} <url>", args[0]);
-        return Ok(());
-    }
-
-    load(&Url::new(&args[1]))?;
-
-    Ok(())
+// fn main() -> Result<()> {
+//     // Earlier previous debug/testing lines
+//     // let url = Url::new("http://www.google.com/");
+//     // let request = Url::request(&url);
+//     // println!("{:?}", url);
+//     // println!("{:?}\n", request);
+//
+//     let args: Vec<String> = args().collect();
+//
+//     if args.len() < 2 {
+//         eprintln!("Usage: {} <url>", args[0]);
+//         return Ok(());
+//     }
+//
+//     load(&Url::new(&args[1]))?;
+//
+//     Ok(())
+// }
+//
+fn main() -> eframe::Result<()> {
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "My Rust Browser",
+        native_options,
+        Box::new(|cc| Ok(Box::new(BrowserApp::default()))),
+    )
 }
