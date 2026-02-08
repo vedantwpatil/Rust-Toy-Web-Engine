@@ -1,6 +1,8 @@
-from ex import Url, load
+import tkinter
+from ex import Url, Browser
 
 if __name__ == "__main__":
     import sys
 
-    load(Url(sys.argv[1]))
+    Browser().load(Url(sys.argv[1]))
+    tkinter.mainloop()
