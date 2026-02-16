@@ -1,7 +1,6 @@
 use eframe::egui;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::args;
 use std::fs::File;
@@ -245,7 +244,9 @@ fn show(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<()
 
     // Convert bytes to string
     let body = String::from_utf8_lossy(&buffer);
-    println!("HTML Body: {}", body);
+    let cleaned_body = transform_entities(&body);
+
+    println!("HTML Body: {}", cleaned_body);
 
     Ok(())
 }
@@ -258,6 +259,33 @@ fn load(url: &Url, cache: &mut HashMap<String, BufReader<NetworkStream>>) -> std
     // We save the live socket for next time
     cache.insert(url.host.clone(), reader);
     Ok(())
+}
+
+fn transform_entities(text: &str) -> String {
+    let mut out = String::new();
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '&' {
+            // We need to convert the following slice
+            let remainder: String = chars[i..].iter().collect();
+
+            if remainder.starts_with("&lt;") {
+                out.push('<');
+                i += 4;
+                continue;
+            } else if remainder.starts_with("&gt;") {
+                out.push('>');
+                i += 4;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 fn main() -> Result<()> {
