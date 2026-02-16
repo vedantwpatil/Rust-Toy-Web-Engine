@@ -136,13 +136,21 @@ impl Url {
         &self,
         cache: &mut HashMap<String, BufReader<NetworkStream>>,
     ) -> std::io::Result<(BufReader<NetworkStream>, usize)> {
-        // Phase 1: Get a Connection (Reuse or Create)
+        if self.scheme == "file" {
+            let path = &self.path;
+
+            println!("Opening local file: {}", path);
+            let file = File::open(path)?;
+
+            let len = file.metadata()?.len() as usize;
+
+            return Ok((BufReader::new(NetworkStream::File(file)), len));
+        }
+
         let mut stream = self.get_connection(cache)?;
 
-        // Phase 2: Send the Request
         self.send_request(stream.get_mut())?;
 
-        // Phase 3: Parse Headers & Content-Length
         let content_length = self.parse_response_headers(&mut stream)?;
 
         Ok((stream, content_length))
