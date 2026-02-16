@@ -2,6 +2,7 @@ use eframe::egui;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::env::args;
 use std::fs::File;
 use std::io::Result;
@@ -129,131 +130,161 @@ impl Url {
     }
 
     // Originally was going to do a one to one converstion but ran into issues with internet protocols so there are slight modifications
-    fn request(&self) -> std::io::Result<BufReader<NetworkStream>> {
-        if self.scheme == "file" {
-            println!("Opening local file: {}", self.path);
-            let file = File::open(&self.path)?;
+    // Modified the function to allow to be able to reuse previous connections with the keep alive
+    // header
+    fn request(
+        &self,
+        cache: &mut HashMap<String, BufReader<NetworkStream>>,
+    ) -> std::io::Result<(BufReader<NetworkStream>, usize)> {
+        // Phase 1: Get a Connection (Reuse or Create)
+        let mut stream = self.get_connection(cache)?;
 
-            return Ok(BufReader::new(NetworkStream::File(file)));
+        // Phase 2: Send the Request
+        self.send_request(stream.get_mut())?;
+
+        // Phase 3: Parse Headers & Content-Length
+        let content_length = self.parse_response_headers(&mut stream)?;
+
+        Ok((stream, content_length))
+    }
+
+    fn get_connection(
+        &self,
+        cache: &mut HashMap<String, BufReader<NetworkStream>>,
+    ) -> std::io::Result<BufReader<NetworkStream>> {
+        if let Some(reader) = cache.remove(&self.host) {
+            return Ok(reader);
         }
 
         let port = if self.scheme == "https" {
-            ":443"
+            ":433"
         } else {
             ":80"
         };
-        let address = format!("{}{}", self.host, port);
+        let addr = format!("{}{}", self.host, port);
+        let tcp = TcpStream::connect(&addr)?;
 
-        let tcp_stream = TcpStream::connect(&address)?;
-
-        // Upgrade to TLS if possible
         let stream = if self.scheme == "https" {
-            let server_name = ServerName::try_from(self.host.clone())
+            let sn = ServerName::try_from(self.host.clone())
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-
-            let client = ClientConnection::new(get_tls_config(), server_name)
-                .map_err(std::io::Error::other)?;
-
-            // Wrap the TCP stream in TLS and return the Tls variant
-            NetworkStream::Tls(Box::new(StreamOwned::new(client, tcp_stream)))
+            let client =
+                ClientConnection::new(get_tls_config(), sn).map_err(std::io::Error::other)?;
+            NetworkStream::Tls(Box::new(StreamOwned::new(client, tcp)))
         } else {
-            // Just return the Plain variant
-            NetworkStream::Plain(tcp_stream)
+            NetworkStream::Plain(tcp)
         };
 
-        let mut writer = BufWriter::new(stream);
+        Ok(BufReader::new(stream))
+    }
 
-        // "write_fmt" is the streaming version of "format!"
+    fn send_request(&self, stream: &mut NetworkStream) -> std::io::Result<()> {
+        let mut writer = BufWriter::new(stream);
+        let path = if self.path.is_empty() {
+            "/"
+        } else {
+            &self.path
+        };
+
         write!(
             writer,
-            "GET {} HTTP/1.1\r\n",
-            if self.path.is_empty() {
-                "/"
-            } else {
-                &self.path
-            }
+            "GET {} HTTP/1.1\r\n\
+             Host: {}\r\n\
+             Connection: keep-alive\r\n\
+             User-Agent: RustBrowser/1.0\r\n\
+             \r\n",
+            path, self.host
         )?;
 
-        // Note: Header is more efficient since we don't need lookups
-        let headers: Vec<(Cow<'static, str>, Cow<'_, str>)> = vec![
-            ("Host".into(), Cow::Borrowed(&self.host)),
-            ("Connection".into(), "close".into()),
-            ("User-Agent".into(), "RustBrowser/1.0".into()),
-        ];
-
-        for (key, value) in headers {
-            write!(writer, "{}: {}\r\n", key, value)?;
-        }
-
-        // End of Headers
-        write!(writer, "\r\n")?;
-        writer.flush()?;
-
-        // READER: Unwrap the stream back out of BufWriter to pass to BufReader
-        // (This works because BufWriter::into_inner returns the inner stream)
-        let stream = writer.into_inner().map_err(|e| e.into_error())?;
-        let mut reader = BufReader::new(stream);
-
+        writer.flush()
+    }
+    fn parse_response_headers(
+        &self,
+        reader: &mut BufReader<NetworkStream>,
+    ) -> std::io::Result<usize> {
         let mut line = String::new();
-        reader.read_line(&mut line)?;
-        println!("Status: {}", line.trim());
-        line.clear();
 
+        // Read Status Line (e.g., "HTTP/1.1 200 OK")
+        reader.read_line(&mut line)?;
+
+        let mut content_length = 0;
+
+        // Loop through headers
         loop {
+            line.clear();
             reader.read_line(&mut line)?;
-            if line == "\r\n" {
+
+            // Empty line (\r\n) means end of headers
+            if line.trim().is_empty() {
                 break;
             }
-            if let Some((key, value)) = line.split_once(":") {
-                println!("Key: {}\nValue: {}", key.trim(), value.trim());
+
+            if let Some((key, value)) = line.split_once(':')
+                && key.eq_ignore_ascii_case("content-length")
+            {
+                content_length = value.trim().parse().unwrap_or(0);
             }
-            line.clear();
         }
 
-        Ok(reader)
+        Ok(content_length)
     }
 }
 
-fn show(reader: &mut BufReader<NetworkStream>) -> std::io::Result<()> {
-    let mut body = String::new();
+fn show(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<()> {
+    // Translate buffer to exact bytes
+    let mut buffer = vec![0u8; len];
 
-    reader.read_to_string(&mut body)?;
+    reader.read_exact(&mut buffer)?;
+
+    // Convert bytes to string
+    let body = String::from_utf8_lossy(&buffer);
     println!("HTML Body: {}", body);
 
     Ok(())
 }
 
-fn load(url: &Url) -> std::io::Result<()> {
-    let mut reader = Url::request(url)?;
-    show(&mut reader)?;
+// Modified function to allow for perssitent connections/sockets (Keep alive)
+fn load(url: &Url, cache: &mut HashMap<String, BufReader<NetworkStream>>) -> std::io::Result<()> {
+    let (mut reader, content_length) = url.request(cache)?;
+    show(&mut reader, content_length)?;
+
+    // We save the live socket for next time
+    cache.insert(url.host.clone(), reader);
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    // Earlier previous debug/testing lines
+    // let url = Url::new("http://www.google.com/");
+    // let request = Url::request(&url);
+    // println!("{:?}", url);
+    // println!("{:?}\n", request);
+
+    let args: Vec<String> = args().collect();
+    let mut connection_cache: HashMap<String, BufReader<NetworkStream>> = HashMap::new();
+    let url_str = &args[1];
+    let url = Url::new(url_str);
+
+    if args.len() < 2 {
+        eprintln!("Usage: {} <url>", args[0]);
+        return Ok(());
+    }
+
+    // Testing keep alive header
+    println!("Initial request");
+    load(&url, &mut connection_cache)?;
+
+    println!("Second request");
+    load(&url, &mut connection_cache)?;
 
     Ok(())
 }
 
-// fn main() -> Result<()> {
-//     // Earlier previous debug/testing lines
-//     // let url = Url::new("http://www.google.com/");
-//     // let request = Url::request(&url);
-//     // println!("{:?}", url);
-//     // println!("{:?}\n", request);
-//
-//     let args: Vec<String> = args().collect();
-//
-//     if args.len() < 2 {
-//         eprintln!("Usage: {} <url>", args[0]);
-//         return Ok(());
-//     }
-//
-//     load(&Url::new(&args[1]))?;
-//
-//     Ok(())
+// Testing the application
+// fn main() -> eframe::Result<()> {
+//     let native_options = eframe::NativeOptions::default();
+//     eframe::run_native(
+//         "My Rust Browser",
+//         native_options,
+//         Box::new(|cc| Ok(Box::new(BrowserApp::default()))),
+//     )
 // }
-//
-fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions::default();
-    eframe::run_native(
-        "My Rust Browser",
-        native_options,
-        Box::new(|cc| Ok(Box::new(BrowserApp::default()))),
-    )
-}
