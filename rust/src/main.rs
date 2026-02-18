@@ -2,9 +2,7 @@ use eframe::egui;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::collections::HashMap;
-use std::env::args;
 use std::fs::File;
-use std::io::Result;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, OnceLock};
@@ -13,17 +11,16 @@ static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
 struct BrowserApp {
     url: String,
-    body: Vec<String>,
+    body: String,
+    connection_cache: HashMap<String, BufReader<NetworkStream>>,
 }
 
 impl Default for BrowserApp {
     fn default() -> Self {
         BrowserApp {
             url: "https://browser.engineering/graphics.html".to_owned(),
-            body: vec![
-                "<h1>Welcome</h1>".into(),
-                "<p>Browser Engineering</p>".into(),
-            ],
+            body: String::new(),
+            connection_cache: HashMap::new(),
         }
     }
 }
@@ -35,25 +32,28 @@ impl eframe::App for BrowserApp {
                 ui.label("Url:");
 
                 if ui.text_edit_singleline(&mut self.url).lost_focus() {
+                    let url = Url::new(&self.url);
+                    match load(&url, &mut self.connection_cache) {
+                        Ok(text) => self.body = text,
+                        Err(e) => self.body = format!("Error: {}", e),
+                    }
                     println!("Navigating to {}", self.url);
                 }
 
                 if ui.button("Refresh").clicked() {
-                    self.body.push("New Element".into());
+                    let url = Url::new(&self.url);
+                    match load(&url, &mut self.connection_cache) {
+                        Ok(text) => self.body = text,
+                        Err(e) => self.body = format!("Error: {}", e),
+                    }
                 }
             });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Render Output");
-
-            let painter = ui.painter();
-
-            painter.rect_filled(
-                egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 50.0)),
-                0.0, // rounding
-                egui::Color32::from_rgb(200, 50, 50),
-            );
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.label(&self.body);
+            });
         });
     }
 }
@@ -236,7 +236,7 @@ impl Url {
     }
 }
 
-fn lex(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<()> {
+fn lex(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<String> {
     // Translate buffer to exact bytes
     let mut buffer = vec![0u8; len];
 
@@ -244,21 +244,20 @@ fn lex(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<()>
 
     // Convert bytes to string
     let body = String::from_utf8_lossy(&buffer);
-    let cleaned_body = transform_entities(&body);
-
-    println!("HTML Body: {}", cleaned_body);
-
-    Ok(())
+    Ok(transform_entities(&body))
 }
 
 // Modified function to allow for perssitent connections/sockets (Keep alive)
-fn load(url: &Url, cache: &mut HashMap<String, BufReader<NetworkStream>>) -> std::io::Result<()> {
+fn load(
+    url: &Url,
+    cache: &mut HashMap<String, BufReader<NetworkStream>>,
+) -> std::io::Result<String> {
     let (mut reader, content_length) = url.request(cache)?;
-    lex(&mut reader, content_length)?;
+    let text = lex(&mut reader, content_length)?;
 
     // We save the live socket for next time
     cache.insert(url.host.clone(), reader);
-    Ok(())
+    Ok(text)
 }
 
 fn transform_entities(text: &str) -> String {
@@ -266,9 +265,29 @@ fn transform_entities(text: &str) -> String {
 
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
+    let mut in_tag = false;
 
     while i < chars.len() {
-        if chars[i] == '&' {
+        let c = chars[i];
+
+        // Skip everything in the tag
+        if c == '<' {
+            in_tag = true;
+            i += 1;
+            continue;
+        } else if c == '>' {
+            in_tag = false;
+            i += 1;
+            continue;
+        }
+
+        if in_tag {
+            i += 1;
+            continue;
+        }
+
+        // Hanlde entities
+        if c == '&' {
             // We need to convert the following slice
             let remainder: String = chars[i..].iter().collect();
 
@@ -282,45 +301,45 @@ fn transform_entities(text: &str) -> String {
                 continue;
             }
         }
-        out.push(chars[i]);
+        out.push(c);
         i += 1;
     }
     out
 }
 
-fn main() -> Result<()> {
-    // Earlier previous debug/testing lines
-    // let url = Url::new("http://www.google.com/");
-    // let request = Url::request(&url);
-    // println!("{:?}", url);
-    // println!("{:?}\n", request);
-
-    let args: Vec<String> = args().collect();
-    let mut connection_cache: HashMap<String, BufReader<NetworkStream>> = HashMap::new();
-    let url_str = &args[1];
-    let url = Url::new(url_str);
-
-    if args.len() < 2 {
-        eprintln!("Usage: {} <url>", args[0]);
-        return Ok(());
-    }
-
-    // Testing keep alive header
-    println!("Initial request");
-    load(&url, &mut connection_cache)?;
-
-    println!("Second request");
-    load(&url, &mut connection_cache)?;
-
-    Ok(())
-}
+// fn main() -> Result<()> {
+//     // Earlier previous debug/testing lines
+//     // let url = Url::new("http://www.google.com/");
+//     // let request = Url::request(&url);
+//     // println!("{:?}", url);
+//     // println!("{:?}\n", request);
+//
+//     let args: Vec<String> = args().collect();
+//     let mut connection_cache: HashMap<String, BufReader<NetworkStream>> = HashMap::new();
+//     let url_str = &args[1];
+//     let url = Url::new(url_str);
+//
+//     if args.len() < 2 {
+//         eprintln!("Usage: {} <url>", args[0]);
+//         return Ok(());
+//     }
+//
+//     // Testing keep alive header
+//     println!("Initial request");
+//     load(&url, &mut connection_cache)?;
+//
+//     // println!("Second request");
+//     // load(&url, &mut connection_cache)?;
+//
+//     Ok(())
+// }
 
 // Testing the browser application/representation
-// fn main() -> eframe::Result<()> {
-//     let native_options = eframe::NativeOptions::default();
-//     eframe::run_native(
-//         "My Rust Browser",
-//         native_options,
-//         Box::new(|cc| Ok(Box::new(BrowserApp::default()))),
-//     )
-// }
+fn main() -> eframe::Result<()> {
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "My Rust Browser",
+        native_options,
+        Box::new(|cc| Ok(Box::new(BrowserApp::default()))),
+    )
+}
