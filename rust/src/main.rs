@@ -164,7 +164,7 @@ impl Url {
         }
 
         let port = if self.scheme == "https" {
-            ":433"
+            ":443"
         } else {
             ":80"
         };
@@ -236,7 +236,7 @@ impl Url {
     }
 }
 
-fn show(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<()> {
+fn lex(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<()> {
     // Translate buffer to exact bytes
     let mut buffer = vec![0u8; len];
 
@@ -254,7 +254,7 @@ fn show(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<()
 // Modified function to allow for perssitent connections/sockets (Keep alive)
 fn load(url: &Url, cache: &mut HashMap<String, BufReader<NetworkStream>>) -> std::io::Result<()> {
     let (mut reader, content_length) = url.request(cache)?;
-    show(&mut reader, content_length)?;
+    lex(&mut reader, content_length)?;
 
     // We save the live socket for next time
     cache.insert(url.host.clone(), reader);
@@ -315,7 +315,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-// Testing the application
+// Testing the browser application/representation
 // fn main() -> eframe::Result<()> {
 //     let native_options = eframe::NativeOptions::default();
 //     eframe::run_native(
