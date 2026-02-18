@@ -65,9 +65,43 @@ impl eframe::App for BrowserApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.label(&self.body);
-            });
+            let mut scroll_delta = egui::Vec2::ZERO;
+
+            let input = ctx.input(|i| i.clone());
+            if input.key_pressed(egui::Key::ArrowDown) {
+                scroll_delta.y -= 40.0;
+            }
+            if input.key_pressed(egui::Key::ArrowUp) {
+                scroll_delta.y += 40.0;
+            }
+            if input.key_pressed(egui::Key::PageDown) {
+                scroll_delta.y -= 300.0;
+            }
+            if input.key_pressed(egui::Key::PageUp) {
+                scroll_delta.y += 300.0;
+            }
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false]) // don’t auto-shrink width/height
+                .id_salt("main_scroll")
+                .show(ui, |ui| {
+                    // TODO: Fix
+                    // Want to scroll with cursor, doesn't work currently
+                    //
+                    // if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
+                    //     ui.scroll_to_cursor(Some(egui::Align::TOP));
+                    // }
+                    //
+                    // if ctx.input(|i| i.key_pressed(egui::Key::End)) {
+                    //     ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    // }
+
+                    if scroll_delta != egui::Vec2::ZERO {
+                        ui.scroll_with_delta(scroll_delta);
+                    }
+                    ui.set_min_width(ui.available_width());
+                    ui.label(&self.body);
+                });
         });
     }
 }
