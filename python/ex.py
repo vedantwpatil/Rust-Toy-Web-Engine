@@ -71,14 +71,27 @@ class Browser:
         self.canvas.pack()
 
     def load(self, url):
+        HSTEP, VSTEP = 13, 18
+        cursor_x, cursor_y = HSTEP, VSTEP
+
         body = url.request()
-        show(body)
+        text = lex(body)
+
         self.canvas.create_rectangle(10, 20, 400, 300)
         self.canvas.create_oval(100, 100, 150, 150)
         self.canvas.create_text(200, 150, text="Hi!")
 
+        for c in text:
+            self.canvas.create_text(cursor_x, cursor_y, text=c)
+            cursor_x += HSTEP
 
-def show(body):
+            if cursor_x >= WIDTH - HSTEP:
+                cursor_y += VSTEP
+                cursor_x = HSTEP
+
+
+def lex(body):
+    text = ""
     in_tag = False
 
     for c in body:
@@ -87,7 +100,8 @@ def show(body):
         elif c == ">":
             in_tag = False
         elif not in_tag:
-            print(c, end="")
+            text += c
+    return text
 
 
 def test():
