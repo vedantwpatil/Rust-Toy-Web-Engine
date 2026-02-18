@@ -18,7 +18,7 @@ struct BrowserApp {
 impl Default for BrowserApp {
     fn default() -> Self {
         BrowserApp {
-            url: "https://browser.engineering/graphics.html".to_owned(),
+            url: "https://browser.engineering/".to_owned(),
             body: String::new(),
             connection_cache: HashMap::new(),
         }
@@ -260,31 +260,31 @@ fn load(
     Ok(text)
 }
 
-fn transform_entities(text: &str) -> String {
+fn strip_tags(text: &str) -> String {
     let mut out = String::new();
-
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
     let mut in_tag = false;
+
+    for c in text.chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn transform_entities(text: &str) -> String {
+    let stripped = strip_tags(text);
+
+    let chars: Vec<char> = stripped.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
 
     while i < chars.len() {
         let c = chars[i];
-
-        // Skip everything in the tag
-        if c == '<' {
-            in_tag = true;
-            i += 1;
-            continue;
-        } else if c == '>' {
-            in_tag = false;
-            i += 1;
-            continue;
-        }
-
-        if in_tag {
-            i += 1;
-            continue;
-        }
 
         // Hanlde entities
         if c == '&' {
