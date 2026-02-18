@@ -25,6 +25,18 @@ impl Default for BrowserApp {
     }
 }
 
+impl BrowserApp {
+    fn new() -> Self {
+        let mut app = BrowserApp::default();
+        let url = Url::new(&app.url);
+        match load(&url, &mut app.connection_cache) {
+            Ok(text) => app.body = text,
+            Err(e) => app.body = format!("Error: {}", e),
+        }
+        app
+    }
+}
+
 impl eframe::App for BrowserApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("chrome").show(ctx, |ui| {
@@ -33,6 +45,7 @@ impl eframe::App for BrowserApp {
 
                 if ui.text_edit_singleline(&mut self.url).lost_focus() {
                     let url = Url::new(&self.url);
+
                     match load(&url, &mut self.connection_cache) {
                         Ok(text) => self.body = text,
                         Err(e) => self.body = format!("Error: {}", e),
@@ -42,6 +55,7 @@ impl eframe::App for BrowserApp {
 
                 if ui.button("Refresh").clicked() {
                     let url = Url::new(&self.url);
+
                     match load(&url, &mut self.connection_cache) {
                         Ok(text) => self.body = text,
                         Err(e) => self.body = format!("Error: {}", e),
@@ -340,6 +354,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "My Rust Browser",
         native_options,
-        Box::new(|cc| Ok(Box::new(BrowserApp::default()))),
+        Box::new(|_cc| Ok(Box::new(BrowserApp::new()))),
     )
 }
