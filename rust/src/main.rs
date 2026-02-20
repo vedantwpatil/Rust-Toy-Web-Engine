@@ -317,10 +317,15 @@ fn strip_tags(text: &str) -> String {
             in_tag = true;
         } else if c == '>' {
             in_tag = false;
+        }
+        // double newline simulates a paragraph break
+        else if c == '\n' {
+            out.push_str("\n\n");
         } else if !in_tag {
             out.push(c);
         }
     }
+
     out
 }
 
@@ -334,7 +339,7 @@ fn transform_entities(text: &str) -> String {
     while i < chars.len() {
         let c = chars[i];
 
-        // Hanlde entities
+        // Handle entities
         if c == '&' {
             // We need to convert the following slice
             let remainder: String = chars[i..].iter().collect();
