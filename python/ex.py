@@ -3,9 +3,11 @@ import socket
 import tkinter
 
 WIDTH, HEIGHT = 800, 600
+HSTEP, VSTEP = 13, 18
+SCROLL_STEP = 100
 
 
-class Url:
+class URL:
     def __init__(self, url: str):
         self.scheme, url = url.split("://", 1)
         assert self.scheme in ["http", "https"]
@@ -38,11 +40,8 @@ class Url:
         request += "\r\n"
         s.send(request.encode("utf8"))
 
-        # Returns a file like object that contains all the bytes we receive from the server
-        # We then take all those bytes and then convert them into a string with the utf encoding
         response = s.makefile("r", encoding="utf8", newline="\r\n")
 
-        # You could check that the server is talking in http 1.0 however there are a lot of servers which contain outdated error codes
         statusLine = response.readline()
         version, status, explanation = statusLine.split(" ", 2)
 
@@ -52,42 +51,11 @@ class Url:
             if line == "\r\n":
                 break
             header, value = line.split(":", 1)
-            # Populate the map of header names to header values forcing all them to be lowercase since they typically are case sensitive
             response_headers[header.casefold()] = value.strip()
-
-        # print(f"{response}\n")
-        # for key, value in response_headers.items():
-        #     print(f"Key: {key}\nValue: {value}")
 
         body = response.read()
         s.close()
         return body
-
-
-class Browser:
-    def __init__(self):
-        self.window = tkinter.Tk()
-        self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
-        self.canvas.pack()
-
-    def load(self, url):
-        HSTEP, VSTEP = 13, 18
-        cursor_x, cursor_y = HSTEP, VSTEP
-
-        body = url.request()
-        text = lex(body)
-
-        self.canvas.create_rectangle(10, 20, 400, 300)
-        self.canvas.create_oval(100, 100, 150, 150)
-        self.canvas.create_text(200, 150, text="Hi!")
-
-        for c in text:
-            self.canvas.create_text(cursor_x, cursor_y, text=c)
-            cursor_x += HSTEP
-
-            if cursor_x >= WIDTH - HSTEP:
-                cursor_y += VSTEP
-                cursor_x = HSTEP
 
 
 def lex(body):
@@ -104,9 +72,53 @@ def lex(body):
     return text
 
 
-def test():
-    url = Url("http://www.google.com/")
-    url.request()
+def layout(text):
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+    for c in text:
+        display_list.append((cursor_x, cursor_y, c))
+        cursor_x += HSTEP
+        if cursor_x >= WIDTH - HSTEP:
+            cursor_y += VSTEP
+            cursor_x = HSTEP
+    return display_list
 
 
-test()
+class Browser:
+    def __init__(self):
+        self.window = tkinter.Tk()
+        self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
+        self.canvas.pack()
+        self.scroll = 0
+        self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
+
+    def load(self, url):
+        body = url.request()
+        text = lex(body)
+        self.display_list = layout(text)
+        self.draw()
+
+    def draw(self):
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            if y > self.scroll + HEIGHT:
+                continue
+            if y + VSTEP < self.scroll:
+                continue
+            self.canvas.create_text(x, y - self.scroll, text=c)
+
+    def scrolldown(self, e):
+        self.scroll += SCROLL_STEP
+        self.draw()
+
+    def scrollup(self, e):
+        self.scroll = max(0, self.scroll - SCROLL_STEP)
+        self.draw()
+
+
+if __name__ == "__main__":
+    import sys
+    url = sys.argv[1] if len(sys.argv) > 1 else "https://browser.engineering/examples/xiyouji.html"
+    Browser().load(URL(url))
+    tkinter.mainloop()
