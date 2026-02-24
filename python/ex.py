@@ -74,13 +74,18 @@ def lex(body):
 
 
 def layout(text):
+    font = tkinter.font.Font()
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
-    for c in text:
-        display_list.append((cursor_x, cursor_y, c))
-        cursor_x += HSTEP
-        if cursor_x >= WIDTH - HSTEP:
-            cursor_y += VSTEP
+
+    # Calculate word length for appropriate spacing
+    for word in text.split():
+        w = font.measure(word)
+        display_list.append((cursor_x, cursor_y, word))
+        cursor_x += w + font.measure(" ")
+
+        if cursor_x + w >= WIDTH - HSTEP:
+            cursor_y += font.metrics("linespace") * 1.25
             cursor_x = HSTEP
     return display_list
 

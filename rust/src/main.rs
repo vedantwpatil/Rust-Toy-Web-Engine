@@ -17,6 +17,58 @@ struct BrowserApp {
     connection_cache: HashMap<String, BufReader<NetworkStream>>,
 }
 
+struct RenderCmd {
+    x: f32,
+    y: f32,
+    text: String,
+}
+
+fn layout(ctx: &egui::Context, text: &str, width: f32) -> Vec<RenderCmd> {
+    let mut display_list = Vec::new();
+
+    let h_step = 13.0;
+    let v_step = 18.0;
+
+    let mut cursor_x = h_step;
+    let mut cursor_y = v_step;
+
+    let font_id = egui::FontId::proportional(16.0);
+
+    for word in text.split_whitespace() {
+        // Measure the word
+        let w = ctx.fonts_mut(|fonts| {
+            let galley =
+                fonts.layout_no_wrap(word.to_string(), font_id.clone(), egui::Color32::WHITE);
+            galley.size().x
+        });
+
+        display_list.push(RenderCmd {
+            x: cursor_x,
+            y: cursor_y,
+            text: word.to_string(),
+        });
+
+        // Measure a space
+        let space_w = ctx.fonts_mut(|fonts| {
+            let galley =
+                fonts.layout_no_wrap(" ".to_string(), font_id.clone(), egui::Color32::WHITE);
+            galley.size().x
+        });
+
+        cursor_x += w + space_w;
+
+        // Wrap
+        let line_height = ctx.fonts_mut(|fonts| fonts.row_height(&font_id));
+
+        if cursor_x + w >= width - h_step {
+            cursor_y += line_height * 1.25;
+            cursor_x = h_step;
+        }
+    }
+
+    display_list
+}
+
 impl Default for BrowserApp {
     fn default() -> Self {
         BrowserApp {
