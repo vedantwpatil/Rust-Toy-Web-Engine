@@ -9,9 +9,11 @@ use std::sync::{Arc, OnceLock};
 
 static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
+// Gui client
 struct BrowserApp {
     url: String,
     body: String,
+    fonts_loaded: bool,
     connection_cache: HashMap<String, BufReader<NetworkStream>>,
 }
 
@@ -20,6 +22,7 @@ impl Default for BrowserApp {
         BrowserApp {
             url: "https://browser.engineering/".to_owned(),
             body: String::new(),
+            fonts_loaded: false,
             connection_cache: HashMap::new(),
         }
     }
@@ -37,8 +40,32 @@ impl BrowserApp {
     }
 }
 
+pub fn install_times_new_roman(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "TimesNewRoman".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Times-Regular.ttf"
+        ))),
+    );
+
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .unwrap()
+        .insert(0, "TimesNewRoman".to_owned());
+
+    ctx.set_fonts(fonts);
+}
+
 impl eframe::App for BrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.fonts_loaded {
+            install_times_new_roman(ctx);
+            self.fonts_loaded = true;
+        }
+
         egui::TopBottomPanel::top("chrome").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Url:");
@@ -105,6 +132,8 @@ impl eframe::App for BrowserApp {
         });
     }
 }
+
+// Networking
 
 fn get_tls_config() -> Arc<ClientConfig> {
     TLS_CONFIG
