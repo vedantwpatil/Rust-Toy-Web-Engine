@@ -40,7 +40,7 @@ impl BrowserApp {
     }
 }
 
-pub fn install_times_new_roman(ctx: &egui::Context) {
+pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     fonts.font_data.insert(
@@ -50,11 +50,20 @@ pub fn install_times_new_roman(ctx: &egui::Context) {
         ))),
     );
 
-    fonts
+    fonts.font_data.insert(
+        "ChineseFontsSupport".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansSC.ttf"
+        ))),
+    );
+
+    let proportional = fonts
         .families
         .get_mut(&egui::FontFamily::Proportional)
-        .unwrap()
-        .insert(0, "TimesNewRoman".to_owned());
+        .unwrap();
+
+    proportional.insert(0, "ChineseFontsSupport".to_owned());
+    proportional.insert(0, "TimesNewRoman".to_owned());
 
     ctx.set_fonts(fonts);
 }
@@ -62,7 +71,7 @@ pub fn install_times_new_roman(ctx: &egui::Context) {
 impl eframe::App for BrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.fonts_loaded {
-            install_times_new_roman(ctx);
+            install_fonts(ctx);
             self.fonts_loaded = true;
         }
 
