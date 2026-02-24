@@ -1,6 +1,7 @@
 import ssl
 import socket
 import tkinter
+import tkinter.font
 
 WIDTH, HEIGHT = 800, 600
 HSTEP, VSTEP = 13, 18
@@ -87,6 +88,9 @@ def layout(text):
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
+        self.bi_times = tkinter.font.Font(
+            family="Times", size=16, weight="bold", slant="italic"
+        )
         self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
         self.canvas.pack()
         self.scroll = 0
@@ -119,6 +123,11 @@ class Browser:
 
 if __name__ == "__main__":
     import sys
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://browser.engineering/examples/xiyouji.html"
+
+    url = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "https://browser.engineering/examples/xiyouji.html"
+    )
     Browser().load(URL(url))
     tkinter.mainloop()
