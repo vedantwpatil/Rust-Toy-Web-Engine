@@ -22,4 +22,4 @@ Wrote out some of the introduction code for implementing a basic http client. Ab
 
 ### To Review
 
-Better understand the cryptographic signature and such that was required to implement for secure connections in rust
+Better understand the cryptographic signature and such that was required to implement for secure connections in rust. There was a lot of wrapping the connection with additional parameters which didn't make the most amount of sense
