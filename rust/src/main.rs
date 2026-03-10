@@ -31,12 +31,17 @@ impl Default for BrowserApp {
 impl BrowserApp {
     fn new() -> Self {
         let mut app = BrowserApp::default();
-        let url = Url::new(&app.url);
-        match load(&url, &mut app.connection_cache) {
-            Ok(tokens) => app.tokens = tokens,
-            Err(e) => app.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
-        }
+        let url = app.url.clone();
+        app.navigate(&url);
         app
+    }
+
+    fn navigate(&mut self, url_str: &str) {
+        let url = Url::new(url_str);
+        match load(&url, &mut self.connection_cache) {
+            Ok(tokens) => self.tokens = tokens,
+            Err(e) => self.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
+        }
     }
 }
 
@@ -47,6 +52,27 @@ pub fn install_fonts(ctx: &egui::Context) {
         "TimesNewRoman".to_owned(),
         Arc::new(egui::FontData::from_static(include_bytes!(
             "../assets/fonts/Times-Regular.ttf"
+        ))),
+    );
+
+    fonts.font_data.insert(
+        "TimesNewRomanBold".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Times-Bold.ttf"
+        ))),
+    );
+
+    fonts.font_data.insert(
+        "TimesNewRomanItalic".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Times-Italic.ttf"
+        ))),
+    );
+
+    fonts.font_data.insert(
+        "TimesNewRomanBoldItalic".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Times-BoldItalic.ttf"
         ))),
     );
 
@@ -65,6 +91,13 @@ pub fn install_fonts(ctx: &egui::Context) {
     proportional.insert(0, "ChineseFontsSupport".to_owned());
     proportional.insert(0, "TimesNewRoman".to_owned());
 
+    for name in ["TimesNewRomanBold", "TimesNewRomanItalic", "TimesNewRomanBoldItalic"] {
+        fonts.families.insert(
+            egui::FontFamily::Name(name.into()),
+            vec![name.to_owned(), "ChineseFontsSupport".to_owned()],
+        );
+    }
+
     ctx.set_fonts(fonts);
 }
 
@@ -80,22 +113,14 @@ impl eframe::App for BrowserApp {
                 ui.label("Url:");
 
                 if ui.text_edit_singleline(&mut self.url).lost_focus() {
-                    let url = Url::new(&self.url);
-
-                    match load(&url, &mut self.connection_cache) {
-                        Ok(tokens) => self.tokens = tokens,
-                        Err(e) => self.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
-                    }
+                    let url = self.url.clone();
+                    self.navigate(&url);
                     println!("Navigating to {}", self.url);
                 }
 
                 if ui.button("Refresh").clicked() {
-                    let url = Url::new(&self.url);
-
-                    match load(&url, &mut self.connection_cache) {
-                        Ok(tokens) => self.tokens = tokens,
-                        Err(e) => self.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
-                    }
+                    let url = self.url.clone();
+                    self.navigate(&url);
                 }
             });
         });
@@ -151,7 +176,7 @@ impl eframe::App for BrowserApp {
                             rect.min + egui::vec2(item.x, item.y),
                             egui::Align2::LEFT_TOP,
                             &item.word,
-                            egui::FontId::proportional(16.0),
+                            font_id_for(item.bold, item.italic, 16.0),
                             egui::Color32::BLACK,
                         );
                     }
@@ -166,6 +191,18 @@ struct DisplayItem {
     x: f32,
     y: f32,
     word: String,
+    bold: bool,
+    italic: bool,
+}
+
+fn font_id_for(bold: bool, italic: bool, size: f32) -> egui::FontId {
+    let family = match (bold, italic) {
+        (true, true) => egui::FontFamily::Name("TimesNewRomanBoldItalic".into()),
+        (true, false) => egui::FontFamily::Name("TimesNewRomanBold".into()),
+        (false, true) => egui::FontFamily::Name("TimesNewRomanItalic".into()),
+        (false, false) => egui::FontFamily::Proportional,
+    };
+    egui::FontId::new(size, family)
 }
 
 fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayItem> {
@@ -175,10 +212,12 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
 
     let mut cursor_x = HSTEP;
     let mut cursor_y = VSTEP;
+    let mut bold = false;
+    let mut italic = false;
     let mut display_list = Vec::new();
 
-    let font_id = egui::FontId::proportional(FONT_SIZE);
-    let measure = |text: &str| -> f32 {
+    let measure = |text: &str, bold: bool, italic: bool| -> f32 {
+        let font_id = font_id_for(bold, italic, FONT_SIZE);
         ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
     };
 
@@ -186,7 +225,7 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
         match tok {
             HtmlBody::Text(t) => {
                 for word in t.split_whitespace() {
-                    let word_width = measure(word);
+                    let word_width = measure(word, bold, italic);
 
                     if cursor_x + word_width >= width - HSTEP {
                         cursor_y += FONT_SIZE * 1.25;
@@ -197,12 +236,23 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
                         x: cursor_x,
                         y: cursor_y,
                         word: word.to_string(),
+                        bold,
+                        italic,
                     });
 
-                    cursor_x += word_width + measure(" ");
+                    cursor_x += word_width + measure(" ", bold, italic);
                 }
             }
-            HtmlBody::Tag(_) => {}
+            HtmlBody::Tag(tag) => {
+                let tag = tag.trim_matches(|c| c == '<' || c == '>').trim();
+                match tag {
+                    "b" => bold = true,
+                    "/b" => bold = false,
+                    "i" => italic = true,
+                    "/i" => italic = false,
+                    _ => {}
+                }
+            }
         }
     }
 
