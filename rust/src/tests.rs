@@ -1,5 +1,16 @@
 use super::*;
 
+fn text_from_tokens(tokens: &[HtmlBody]) -> String {
+    tokens
+        .iter()
+        .filter_map(|t| match t {
+            HtmlBody::Text(s) => Some(s.as_str()),
+            HtmlBody::Tag(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 // --- Url::new parsing ---
 
 #[test]
@@ -34,51 +45,54 @@ fn test_url_parses_file_scheme() {
     assert_eq!(url.path, "/tmp/test.html");
 }
 
-// --- strip_tags ---
+// --- strip_tags / tokenize ---
 
 #[test]
 fn test_strip_tags_removes_tags() {
-    assert_eq!(strip_tags("<h1>Hello</h1>"), "Hello");
+    assert_eq!(text_from_tokens(&tokenize("<h1>Hello</h1>")), "Hello");
 }
 
 #[test]
 fn test_strip_tags_no_tags() {
-    assert_eq!(strip_tags("plain text"), "plain text");
+    assert_eq!(text_from_tokens(&tokenize("plain text")), "plain text");
 }
 
 #[test]
 fn test_strip_tags_nested() {
-    assert_eq!(strip_tags("<div><p>text</p></div>"), "text");
+    assert_eq!(text_from_tokens(&tokenize("<div><p>text</p></div>")), "text");
 }
 
 #[test]
 fn test_strip_tags_empty() {
-    assert_eq!(strip_tags(""), "");
+    assert_eq!(text_from_tokens(&tokenize("")), "");
 }
 
-// --- transform_entities ---
+// --- resolve_entities ---
 
 #[test]
 fn test_transform_entities_lt() {
-    assert_eq!(transform_entities("a &lt; b"), "a < b");
+    assert_eq!(resolve_entities("a &lt; b"), "a < b");
 }
 
 #[test]
 fn test_transform_entities_gt() {
-    assert_eq!(transform_entities("a &gt; b"), "a > b");
+    assert_eq!(resolve_entities("a &gt; b"), "a > b");
 }
 
 #[test]
 fn test_transform_entities_both() {
-    assert_eq!(transform_entities("&lt;tag&gt;"), "<tag>");
+    assert_eq!(resolve_entities("&lt;tag&gt;"), "<tag>");
 }
 
 #[test]
 fn test_transform_entities_strips_tags_first() {
-    assert_eq!(transform_entities("<b>bold &lt;text&gt;</b>"), "bold <text>");
+    assert_eq!(
+        text_from_tokens(&tokenize("<b>bold &lt;text&gt;</b>")),
+        "bold <text>"
+    );
 }
 
 #[test]
 fn test_transform_entities_no_entities() {
-    assert_eq!(transform_entities("hello world"), "hello world");
+    assert_eq!(resolve_entities("hello world"), "hello world");
 }
