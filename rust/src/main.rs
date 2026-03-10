@@ -312,7 +312,7 @@ impl Url {
             }
 
             if let Some((key, value)) = line.split_once(':')
-                && key.eq_ignore_ascii_case("content-length")
+                && key.trim().eq_ignore_ascii_case("content-length")
             {
                 content_length = value.trim().parse().unwrap_or(0);
             }
@@ -320,6 +320,12 @@ impl Url {
 
         Ok(content_length)
     }
+}
+
+#[derive(Debug)]
+enum HtmlBody {
+    Text(String),
+    Tag(String),
 }
 
 fn lex(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<String> {
@@ -346,54 +352,73 @@ fn load(
     Ok(text)
 }
 
-fn strip_tags(text: &str) -> String {
-    let mut out = String::new();
+fn strip_tags(text: &str) -> Vec<HtmlBody> {
+    let mut out: Vec<HtmlBody> = Vec::new();
+    let mut buffer = String::new();
     let mut in_tag = false;
 
     for c in text.chars() {
         if c == '<' {
+            if !in_tag && !buffer.is_empty() {
+                out.push(HtmlBody::Text(buffer.clone()));
+                buffer.clear();
+            }
             in_tag = true;
+            buffer.push(c);
         } else if c == '>' {
+            buffer.push(c);
+            out.push(HtmlBody::Tag(buffer.clone()));
+            buffer.clear();
             in_tag = false;
         }
         // double newline simulates a paragraph break
-        else if c == '\n' {
-            out.push_str("\n\n");
-        } else if !in_tag {
-            out.push(c);
+        else if c == '\n' && !in_tag {
+            buffer.push_str("\n\n");
+        } else {
+            buffer.push(c);
         }
     }
-
+    if !buffer.is_empty() {
+        if in_tag {
+            out.push(HtmlBody::Tag(buffer));
+        } else {
+            out.push(HtmlBody::Text(buffer));
+        }
+    }
     out
 }
 
 fn transform_entities(text: &str) -> String {
     let stripped = strip_tags(text);
-
-    let chars: Vec<char> = stripped.chars().collect();
     let mut out = String::new();
-    let mut i = 0;
 
-    while i < chars.len() {
-        let c = chars[i];
+    for element in stripped {
+        if let HtmlBody::Text(t) = element {
+            let chars: Vec<char> = t.chars().collect();
+            let mut i = 0;
 
-        // Handle entities
-        if c == '&' {
-            // We need to convert the following slice
-            let remainder: String = chars[i..].iter().collect();
+            while i < chars.len() {
+                let c = chars[i];
 
-            if remainder.starts_with("&lt;") {
-                out.push('<');
-                i += 4;
-                continue;
-            } else if remainder.starts_with("&gt;") {
-                out.push('>');
-                i += 4;
-                continue;
+                // Hanle entities
+                if c == '&' {
+                    // Need to transform this to a slice
+                    let remainder: String = chars[i..].iter().collect();
+
+                    if remainder.starts_with("&lt;") {
+                        out.push('<');
+                        i += 4;
+                        continue;
+                    } else if remainder.starts_with("&gt;") {
+                        out.push('>');
+                        i += 4;
+                        continue;
+                    }
+                }
+                out.push(c);
+                i += 1;
             }
         }
-        out.push(c);
-        i += 1;
     }
     out
 }
