@@ -59,37 +59,6 @@ class URL:
         return body
 
 
-def lex(body):
-    text = ""
-    in_tag = False
-
-    for c in body:
-        if c == "<":
-            in_tag = True
-        elif c == ">":
-            in_tag = False
-        elif not in_tag:
-            text += c
-    return text
-
-
-def layout(text):
-    font = tkinter.font.Font()
-    display_list = []
-    cursor_x, cursor_y = HSTEP, VSTEP
-
-    # Calculate word length for appropriate spacing
-    for word in text.split():
-        w = font.measure(word)
-        display_list.append((cursor_x, cursor_y, word))
-        cursor_x += w + font.measure(" ")
-
-        if cursor_x + w >= WIDTH - HSTEP:
-            cursor_y += font.metrics("linespace") * 1.25
-            cursor_x = HSTEP
-    return display_list
-
-
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
@@ -110,12 +79,12 @@ class Browser:
 
     def draw(self):
         self.canvas.delete("all")
-        for x, y, c in self.display_list:
+        for x, y, c, font in self.display_list:
             if y > self.scroll + HEIGHT:
                 continue
             if y + VSTEP < self.scroll:
                 continue
-            self.canvas.create_text(x, y - self.scroll, text=c)
+            self.canvas.create_text(x, y - self.scroll, text=c, font=font)
 
     def scrolldown(self, e):
         self.scroll += SCROLL_STEP
@@ -124,6 +93,78 @@ class Browser:
     def scrollup(self, e):
         self.scroll = max(0, self.scroll - SCROLL_STEP)
         self.draw()
+
+
+class Text:
+    def __init__(self, text) -> None:
+        self.text = text
+
+
+class Tag:
+    def __init__(self, tag) -> None:
+        self.tag = tag
+
+
+# Tokenizes the html and identifies either raw text or html tags
+def lex(body):
+    out = []
+    buffer = ""
+    in_tag = False
+
+    for c in body:
+        # Once we enter a tag, store the existing buffer into the output as text
+        if c == "<":
+            in_tag = True
+            if buffer:
+                out.append(Text(buffer))
+            buffer = ""
+
+        # Once we exit the tag, store the existing buffer into the output as a tag
+        elif c == ">":
+            in_tag = False
+            out.append(Tag(buffer))
+            buffer = ""
+        else:
+            buffer += c
+
+    # Add the normal text to our output
+    if not in_tag and buffer:
+        out.append(Text(buffer))
+
+    return out
+
+
+def layout(tokens):
+    weight = "normal"
+    style = "roman"
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+
+    # Calculate word length for appropriate spacing
+    for tok in tokens:
+        if isinstance(tok, Text):
+            font = tkinter.font.Font(size=16, weight=weight, slant=style)
+
+            for word in tok.text.split():
+                w = font.measure(word)
+
+                if cursor_x + w >= WIDTH - HSTEP:
+                    cursor_y += font.metrics("linespace") * 1.25
+                    cursor_x = HSTEP
+
+                display_list.append((cursor_x, cursor_y, word, font))
+                cursor_x += w + font.measure(" ")
+
+        elif tok.tag == "i":
+            style = "italic"
+        elif tok.tag == "/i":
+            style = "roman"
+        elif tok.tag == "b":
+            weight = "bold"
+        elif tok.tag == "/b":
+            weight = "normal"
+
+    return display_list
 
 
 if __name__ == "__main__":
