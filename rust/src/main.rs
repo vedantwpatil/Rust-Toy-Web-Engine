@@ -12,7 +12,7 @@ static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 // Gui client
 struct BrowserApp {
     url: String,
-    body: String,
+    tokens: Vec<HtmlBody>,
     fonts_loaded: bool,
     connection_cache: HashMap<String, BufReader<NetworkStream>>,
 }
@@ -21,7 +21,7 @@ impl Default for BrowserApp {
     fn default() -> Self {
         BrowserApp {
             url: "https://browser.engineering/".to_owned(),
-            body: String::new(),
+            tokens: Vec::new(),
             fonts_loaded: false,
             connection_cache: HashMap::new(),
         }
@@ -33,8 +33,8 @@ impl BrowserApp {
         let mut app = BrowserApp::default();
         let url = Url::new(&app.url);
         match load(&url, &mut app.connection_cache) {
-            Ok(text) => app.body = text,
-            Err(e) => app.body = format!("Error: {}", e),
+            Ok(tokens) => app.tokens = tokens,
+            Err(e) => app.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
         }
         app
     }
@@ -83,8 +83,8 @@ impl eframe::App for BrowserApp {
                     let url = Url::new(&self.url);
 
                     match load(&url, &mut self.connection_cache) {
-                        Ok(text) => self.body = text,
-                        Err(e) => self.body = format!("Error: {}", e),
+                        Ok(tokens) => self.tokens = tokens,
+                        Err(e) => self.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
                     }
                     println!("Navigating to {}", self.url);
                 }
@@ -93,8 +93,8 @@ impl eframe::App for BrowserApp {
                     let url = Url::new(&self.url);
 
                     match load(&url, &mut self.connection_cache) {
-                        Ok(text) => self.body = text,
-                        Err(e) => self.body = format!("Error: {}", e),
+                        Ok(tokens) => self.tokens = tokens,
+                        Err(e) => self.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
                     }
                 }
             });
@@ -118,7 +118,7 @@ impl eframe::App for BrowserApp {
             }
 
             egui::ScrollArea::vertical()
-                .auto_shrink([false, false]) // don’t auto-shrink width/height
+                .auto_shrink([false, false])
                 .id_salt("main_scroll")
                 .show(ui, |ui| {
                     // TODO: Fix
@@ -135,11 +135,78 @@ impl eframe::App for BrowserApp {
                     if scroll_delta != egui::Vec2::ZERO {
                         ui.scroll_with_delta(scroll_delta);
                     }
-                    ui.set_min_width(ui.available_width());
-                    ui.label(&self.body);
+
+                    let available_width = ui.available_width();
+                    let display_list = layout(&self.tokens, ctx, available_width);
+
+                    let max_y = display_list.iter().map(|d| d.y).fold(0.0_f32, f32::max);
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(available_width, max_y + 20.0),
+                        egui::Sense::hover(),
+                    );
+
+                    let painter = ui.painter();
+                    for item in &display_list {
+                        painter.text(
+                            rect.min + egui::vec2(item.x, item.y),
+                            egui::Align2::LEFT_TOP,
+                            &item.word,
+                            egui::FontId::proportional(16.0),
+                            egui::Color32::BLACK,
+                        );
+                    }
                 });
         });
     }
+}
+
+// Layout
+
+struct DisplayItem {
+    x: f32,
+    y: f32,
+    word: String,
+}
+
+fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayItem> {
+    const HSTEP: f32 = 13.0;
+    const VSTEP: f32 = 18.0;
+    const FONT_SIZE: f32 = 16.0;
+
+    let mut cursor_x = HSTEP;
+    let mut cursor_y = VSTEP;
+    let mut display_list = Vec::new();
+
+    let font_id = egui::FontId::proportional(FONT_SIZE);
+    let measure = |text: &str| -> f32 {
+        ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
+    };
+
+    for tok in tokens {
+        match tok {
+            HtmlBody::Text(t) => {
+                for word in t.split_whitespace() {
+                    let word_width = measure(word);
+
+                    if cursor_x + word_width >= width - HSTEP {
+                        cursor_y += FONT_SIZE * 1.25;
+                        cursor_x = HSTEP;
+                    }
+
+                    display_list.push(DisplayItem {
+                        x: cursor_x,
+                        y: cursor_y,
+                        word: word.to_string(),
+                    });
+
+                    cursor_x += word_width + measure(" ");
+                }
+            }
+            HtmlBody::Tag(_) => {}
+        }
+    }
+
+    display_list
 }
 
 // Networking
@@ -290,6 +357,7 @@ impl Url {
 
         writer.flush()
     }
+
     fn parse_response_headers(
         &self,
         reader: &mut BufReader<NetworkStream>,
@@ -322,34 +390,29 @@ impl Url {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum HtmlBody {
     Text(String),
     Tag(String),
 }
 
 fn lex(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<String> {
-    // Translate buffer to exact bytes
     let mut buffer = vec![0u8; len];
-
     reader.read_exact(&mut buffer)?;
-
-    // Convert bytes to string
-    let body = String::from_utf8_lossy(&buffer);
-    Ok(transform_entities(&body))
+    Ok(String::from_utf8_lossy(&buffer).to_string())
 }
 
-// Modified function to allow for perssitent connections/sockets (Keep alive)
+// Modified function to allow for persistent connections/sockets (Keep alive)
 fn load(
     url: &Url,
     cache: &mut HashMap<String, BufReader<NetworkStream>>,
-) -> std::io::Result<String> {
+) -> std::io::Result<Vec<HtmlBody>> {
     let (mut reader, content_length) = url.request(cache)?;
-    let text = lex(&mut reader, content_length)?;
+    let html = lex(&mut reader, content_length)?;
 
     // We save the live socket for next time
     cache.insert(url.host.clone(), reader);
-    Ok(text)
+    Ok(tokenize(&html))
 }
 
 fn strip_tags(text: &str) -> Vec<HtmlBody> {
@@ -388,39 +451,41 @@ fn strip_tags(text: &str) -> Vec<HtmlBody> {
     out
 }
 
-fn transform_entities(text: &str) -> String {
-    let stripped = strip_tags(text);
+fn resolve_entities(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
     let mut out = String::new();
+    let mut i = 0;
 
-    for element in stripped {
-        if let HtmlBody::Text(t) = element {
-            let chars: Vec<char> = t.chars().collect();
-            let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
 
-            while i < chars.len() {
-                let c = chars[i];
+        if c == '&' {
+            let remainder: String = chars[i..].iter().collect();
 
-                // Hanle entities
-                if c == '&' {
-                    // Need to transform this to a slice
-                    let remainder: String = chars[i..].iter().collect();
-
-                    if remainder.starts_with("&lt;") {
-                        out.push('<');
-                        i += 4;
-                        continue;
-                    } else if remainder.starts_with("&gt;") {
-                        out.push('>');
-                        i += 4;
-                        continue;
-                    }
-                }
-                out.push(c);
-                i += 1;
+            if remainder.starts_with("&lt;") {
+                out.push('<');
+                i += 4;
+                continue;
+            } else if remainder.starts_with("&gt;") {
+                out.push('>');
+                i += 4;
+                continue;
             }
         }
+        out.push(c);
+        i += 1;
     }
     out
+}
+
+fn tokenize(html: &str) -> Vec<HtmlBody> {
+    strip_tags(html)
+        .into_iter()
+        .map(|tok| match tok {
+            HtmlBody::Text(t) => HtmlBody::Text(resolve_entities(&t)),
+            HtmlBody::Tag(t) => HtmlBody::Tag(t),
+        })
+        .collect()
 }
 
 fn main() -> eframe::Result<()> {
