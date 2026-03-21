@@ -91,7 +91,11 @@ pub fn install_fonts(ctx: &egui::Context) {
     proportional.insert(0, "ChineseFontsSupport".to_owned());
     proportional.insert(0, "TimesNewRoman".to_owned());
 
-    for name in ["TimesNewRomanBold", "TimesNewRomanItalic", "TimesNewRomanBoldItalic"] {
+    for name in [
+        "TimesNewRomanBold",
+        "TimesNewRomanItalic",
+        "TimesNewRomanBoldItalic",
+    ] {
         fonts.families.insert(
             egui::FontFamily::Name(name.into()),
             vec![name.to_owned(), "ChineseFontsSupport".to_owned()],
@@ -281,6 +285,11 @@ enum NetworkStream {
     File(std::fs::File),
 }
 
+// Allows us to accept the html body in chunks similar to how websites send them
+enum BodyEncoding {
+    ContentLength(usize),
+    Chunked,
+}
 impl Read for NetworkStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
@@ -337,7 +346,7 @@ impl Url {
     fn request(
         &self,
         cache: &mut HashMap<String, BufReader<NetworkStream>>,
-    ) -> std::io::Result<(BufReader<NetworkStream>, usize)> {
+    ) -> std::io::Result<(BufReader<NetworkStream>, BodyEncoding)> {
         if self.scheme == "file" {
             let path = &self.path;
 
@@ -346,7 +355,10 @@ impl Url {
 
             let len = file.metadata()?.len() as usize;
 
-            return Ok((BufReader::new(NetworkStream::File(file)), len));
+            return Ok((
+                BufReader::new(NetworkStream::File(file)),
+                BodyEncoding::ContentLength(len),
+            ));
         }
 
         let mut stream = self.get_connection(cache)?;
@@ -411,8 +423,9 @@ impl Url {
     fn parse_response_headers(
         &self,
         reader: &mut BufReader<NetworkStream>,
-    ) -> std::io::Result<usize> {
+    ) -> std::io::Result<BodyEncoding> {
         let mut line = String::new();
+        let mut is_chunked = false;
 
         // Read Status Line (e.g., "HTTP/1.1 200 OK")
         reader.read_line(&mut line)?;
@@ -433,10 +446,22 @@ impl Url {
                 && key.trim().eq_ignore_ascii_case("content-length")
             {
                 content_length = value.trim().parse().unwrap_or(0);
+
+                // Need to parse for transfer encoding headers to be able to properly render
+                // webpages, they're a different format
+            } else if let Some((key, value)) = line.split_once(':')
+                && key.trim().eq_ignore_ascii_case("transfer-encoding")
+                && value.trim().eq_ignore_ascii_case("chunked")
+            {
+                is_chunked = true;
             }
         }
 
-        Ok(content_length)
+        if is_chunked {
+            Ok(BodyEncoding::Chunked)
+        } else {
+            Ok(BodyEncoding::ContentLength(content_length))
+        }
     }
 }
 
@@ -446,10 +471,36 @@ enum HtmlBody {
     Tag(String),
 }
 
-fn lex(reader: &mut BufReader<NetworkStream>, len: usize) -> std::io::Result<String> {
-    let mut buffer = vec![0u8; len];
-    reader.read_exact(&mut buffer)?;
-    Ok(String::from_utf8_lossy(&buffer).to_string())
+fn lex(reader: &mut BufReader<NetworkStream>, encoding: BodyEncoding) -> std::io::Result<String> {
+    match encoding {
+        BodyEncoding::ContentLength(len) => {
+            let mut buffer = vec![0u8; len];
+            reader.read_exact(&mut buffer)?;
+            Ok(String::from_utf8_lossy(&buffer).to_string())
+        }
+        BodyEncoding::Chunked => {
+            let mut body = String::new();
+            loop {
+                let mut size_line = String::new();
+                reader.read_line(&mut size_line)?;
+
+                let chunk_size =
+                    usize::from_str_radix(size_line.trim(), 16).map_err(std::io::Error::other)?;
+
+                if chunk_size == 0 {
+                    break;
+                }
+
+                let mut chunk = vec![0u8; chunk_size];
+                reader.read_exact(&mut chunk)?;
+                body.push_str(&String::from_utf8_lossy(&chunk));
+
+                let mut crlf = String::new();
+                reader.read_line(&mut crlf)?;
+            }
+            Ok(body)
+        }
+    }
 }
 
 // Modified function to allow for persistent connections/sockets (Keep alive)
@@ -457,8 +508,8 @@ fn load(
     url: &Url,
     cache: &mut HashMap<String, BufReader<NetworkStream>>,
 ) -> std::io::Result<Vec<HtmlBody>> {
-    let (mut reader, content_length) = url.request(cache)?;
-    let html = lex(&mut reader, content_length)?;
+    let (mut reader, encoding) = url.request(cache)?;
+    let html = lex(&mut reader, encoding)?;
 
     // We save the live socket for next time
     cache.insert(url.host.clone(), reader);
