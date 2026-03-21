@@ -326,17 +326,24 @@ struct Url {
     scheme: String,
     host: String,
     path: String,
+    port: Option<u16>,
 }
 
 impl Url {
     fn new(input: &str) -> Self {
         let (scheme, rest) = input.split_once("://").unwrap_or(("", input));
         let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (host, port) = if let Some((h, p)) = host.split_once(':') {
+            (h, Some(p.parse::<u16>().unwrap_or(80)))
+        } else {
+            (host, None)
+        };
 
         Self {
             scheme: scheme.to_string(),
             host: host.to_string(),
             path: format!("/{}", path),
+            port,
         }
     }
 
@@ -378,12 +385,12 @@ impl Url {
             return Ok(reader);
         }
 
-        let port = if self.scheme == "https" {
-            ":443"
-        } else {
-            ":80"
-        };
-        let addr = format!("{}{}", self.host, port);
+        // Added support for ports in url
+        let port = self
+            .port
+            .unwrap_or(if self.scheme == "https" { 443 } else { 80 });
+
+        let addr = format!("{}:{}", self.host, port);
         let tcp = TcpStream::connect(&addr)?;
 
         let stream = if self.scheme == "https" {
