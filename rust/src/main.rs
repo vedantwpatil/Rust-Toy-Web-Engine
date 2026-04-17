@@ -1,4 +1,5 @@
 use eframe::egui;
+use egui::text_selection::text_cursor_state;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::collections::HashMap;
@@ -197,6 +198,7 @@ struct DisplayItem {
     word: String,
     bold: bool,
     italic: bool,
+    size: f32,
 }
 
 fn font_id_for(bold: bool, italic: bool, size: f32) -> egui::FontId {
@@ -209,19 +211,22 @@ fn font_id_for(bold: bool, italic: bool, size: f32) -> egui::FontId {
     egui::FontId::new(size, family)
 }
 
+// https://browser.engineering/text.html
+// Section 6 needs us to modify how we render the size of the font
 fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayItem> {
     const HSTEP: f32 = 13.0;
     const VSTEP: f32 = 18.0;
-    const FONT_SIZE: f32 = 16.0;
 
     let mut cursor_x = HSTEP;
     let mut cursor_y = VSTEP;
     let mut bold = false;
     let mut italic = false;
+    let mut size: f32 = 16.0;
+
     let mut display_list = Vec::new();
 
     let measure = |text: &str, bold: bool, italic: bool| -> f32 {
-        let font_id = font_id_for(bold, italic, FONT_SIZE);
+        let font_id = font_id_for(bold, italic, size);
         ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
     };
 
@@ -232,7 +237,7 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
                     let word_width = measure(word, bold, italic);
 
                     if cursor_x + word_width >= width - HSTEP {
-                        cursor_y += FONT_SIZE * 1.25;
+                        cursor_y += size * 1.25;
                         cursor_x = HSTEP;
                     }
 
@@ -242,6 +247,7 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
                         word: word.to_string(),
                         bold,
                         italic,
+                        size,
                     });
 
                     cursor_x += word_width + measure(" ", bold, italic);
