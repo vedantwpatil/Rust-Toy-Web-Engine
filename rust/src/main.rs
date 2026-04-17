@@ -181,7 +181,7 @@ impl eframe::App for BrowserApp {
                             rect.min + egui::vec2(item.x, item.y),
                             egui::Align2::LEFT_TOP,
                             &item.word,
-                            font_id_for(item.bold, item.italic, 16.0),
+                            font_id_for(item.bold, item.italic, item.size),
                             egui::Color32::BLACK,
                         );
                     }
@@ -225,7 +225,7 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
 
     let mut display_list = Vec::new();
 
-    let measure = |text: &str, bold: bool, italic: bool| -> f32 {
+    let measure = |text: &str, bold: bool, italic: bool, size: f32| -> f32 {
         let font_id = font_id_for(bold, italic, size);
         ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
     };
@@ -234,7 +234,7 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
         match tok {
             HtmlBody::Text(t) => {
                 for word in t.split_whitespace() {
-                    let word_width = measure(word, bold, italic);
+                    let word_width = measure(word, bold, italic, size);
 
                     if cursor_x + word_width >= width - HSTEP {
                         cursor_y += size * 1.25;
@@ -250,7 +250,7 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
                         size,
                     });
 
-                    cursor_x += word_width + measure(" ", bold, italic);
+                    cursor_x += word_width + measure(" ", bold, italic, size);
                 }
             }
             HtmlBody::Tag(tag) => {
@@ -260,6 +260,10 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
                     "/b" => bold = false,
                     "i" => italic = true,
                     "/i" => italic = false,
+                    "small" => size -= 2.0,
+                    "/small" => size += 2.0,
+                    "big" => size += 4.0,
+                    "/big" => size -= 4.0,
                     _ => {}
                 }
             }
