@@ -192,6 +192,9 @@ impl eframe::App for BrowserApp {
 
 // Layout
 
+const HSTEP: f32 = 13.0;
+const VSTEP: f32 = 18.0;
+
 struct DisplayItem {
     x: f32,
     y: f32,
@@ -211,66 +214,124 @@ fn font_id_for(bold: bool, italic: bool, size: f32) -> egui::FontId {
     egui::FontId::new(size, family)
 }
 
-// https://browser.engineering/text.html
-// Section 6 needs us to modify how we render the size of the font
-fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayItem> {
-    const HSTEP: f32 = 13.0;
-    const VSTEP: f32 = 18.0;
+fn measure(text: &str, bold: bool, italic: bool, size: f32, ctx: &egui::Context) -> f32 {
+    let font_id = font_id_for(bold, italic, size);
+    ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
+}
 
-    let mut cursor_x = HSTEP;
-    let mut cursor_y = VSTEP;
-    let mut bold = false;
-    let mut italic = false;
-    let mut size: f32 = 16.0;
+struct Layout {
+    display_list: Vec<DisplayItem>,
+    line: Vec<(f32, String, bool, bool, f32)>, // (x, word, bold, italic, size) — y deferred to flush
+    cursor_x: f32,
+    cursor_y: f32,
+    bold: bool,
+    italic: bool,
+    size: f32,
+    width: f32,
+}
 
-    let mut display_list = Vec::new();
+impl Layout {
+    fn new(width: f32) -> Self {
+        Layout {
+            display_list: Vec::new(),
+            line: Vec::new(),
+            cursor_x: HSTEP,
+            cursor_y: VSTEP,
+            bold: false,
+            italic: false,
+            size: 16.0,
+            width,
+        }
+    }
 
-    let measure = |text: &str, bold: bool, italic: bool, size: f32| -> f32 {
-        let font_id = font_id_for(bold, italic, size);
-        ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
-    };
+    fn word(&mut self, word: &str, ctx: &egui::Context) {
+        let word_width = measure(word, self.bold, self.italic, self.size, ctx);
+        if self.cursor_x + word_width >= self.width - HSTEP {
+            self.flush(ctx);
+        }
+        self.line.push((
+            self.cursor_x,
+            word.to_string(),
+            self.bold,
+            self.italic,
+            self.size,
+        ));
+        self.cursor_x += word_width + measure(" ", self.bold, self.italic, self.size, ctx);
+    }
 
-    for tok in tokens {
+    // Two-pass line layout: collect words with x positions, then align on a shared baseline.
+    // Needed because mixed font sizes mean y can't be set until we know the tallest word.
+    fn flush(&mut self, ctx: &egui::Context) {
+        if self.line.is_empty() {
+            return;
+        }
+        let line = std::mem::take(&mut self.line);
+
+        let max_ascent = line
+            .iter()
+            .map(|(_, _, b, i, s)| ctx.fonts_mut(|f| f.row_height(&font_id_for(*b, *i, *s))) * 0.8)
+            .fold(0.0_f32, f32::max);
+
+        let baseline = self.cursor_y + 1.25 * max_ascent;
+
+        let max_descent = line
+            .iter()
+            .map(|(_, _, b, i, s)| ctx.fonts_mut(|f| f.row_height(&font_id_for(*b, *i, *s))) * 0.2)
+            .fold(0.0_f32, f32::max);
+
+        for (x, word, bold, italic, size) in line {
+            let ascent = ctx.fonts_mut(|f| f.row_height(&font_id_for(bold, italic, size))) * 0.8;
+            self.display_list.push(DisplayItem {
+                x,
+                y: baseline - ascent,
+                word,
+                bold,
+                italic,
+                size,
+            });
+        }
+
+        self.cursor_y = baseline + 1.25 * max_descent;
+        self.cursor_x = HSTEP;
+    }
+
+    fn token(&mut self, tok: &HtmlBody, ctx: &egui::Context) {
         match tok {
             HtmlBody::Text(t) => {
                 for word in t.split_whitespace() {
-                    let word_width = measure(word, bold, italic, size);
-
-                    if cursor_x + word_width >= width - HSTEP {
-                        cursor_y += size * 1.25;
-                        cursor_x = HSTEP;
-                    }
-
-                    display_list.push(DisplayItem {
-                        x: cursor_x,
-                        y: cursor_y,
-                        word: word.to_string(),
-                        bold,
-                        italic,
-                        size,
-                    });
-
-                    cursor_x += word_width + measure(" ", bold, italic, size);
+                    self.word(word, ctx);
                 }
             }
             HtmlBody::Tag(tag) => {
-                let tag = tag.trim_matches(|c| c == '<' || c == '>').trim();
+                let tag = tag.trim_matches(|c: char| c == '<' || c == '>').trim();
                 match tag {
-                    "b" => bold = true,
-                    "/b" => bold = false,
-                    "i" => italic = true,
-                    "/i" => italic = false,
-                    "small" => size -= 2.0,
-                    "/small" => size += 2.0,
-                    "big" => size += 4.0,
-                    "/big" => size -= 4.0,
+                    "b" => self.bold = true,
+                    "/b" => self.bold = false,
+                    "i" => self.italic = true,
+                    "/i" => self.italic = false,
+                    "small" => self.size -= 2.0,
+                    "/small" => self.size += 2.0,
+                    "big" => self.size += 4.0,
+                    "/big" => self.size -= 4.0,
+                    "br" => self.flush(ctx),
+                    "/p" => {
+                        self.flush(ctx);
+                        self.cursor_y += VSTEP;
+                    }
                     _ => {}
                 }
             }
         }
     }
+}
 
-    display_list
+fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayItem> {
+    let mut l = Layout::new(width);
+    for tok in tokens {
+        l.token(tok, ctx);
+    }
+    l.flush(ctx);
+    l.display_list
 }
 
 // Networking
