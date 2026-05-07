@@ -26,6 +26,7 @@ Added font variant support with bold and italic text are now rendered correctly 
 
 - Better understand the cryptographic signature and such that was required to implement for secure connections in rust. There was a lot of wrapping the connection with additional parameters which didn't make the most amount of sense
 - Look into the word by word stylization, there should be a more efficient way of doing it and with `&str` or `bytes` instead of `String`
+- Look more into functional programming with rust and better understanding how we're implementing the browser gui alongside rendering text of different sizes
 
 ### Thoughts on Rust
 
