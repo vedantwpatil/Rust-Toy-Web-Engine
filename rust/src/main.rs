@@ -631,28 +631,29 @@ fn strip_tags(text: &str) -> Vec<HtmlBody> {
 }
 
 fn resolve_entities(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
+    let mut out = String::with_capacity(text.len());
+    let mut remainder = text;
 
-    while i < chars.len() {
-        let c = chars[i];
-
-        if c == '&' {
-            let remainder: String = chars[i..].iter().collect();
-
-            if remainder.starts_with("&lt;") {
-                out.push('<');
-                i += 4;
-                continue;
-            } else if remainder.starts_with("&gt;") {
-                out.push('>');
-                i += 4;
-                continue;
-            }
+    while !remainder.is_empty() {
+        if let Some(rest) = remainder.strip_prefix("&lt;") {
+            out.push('<');
+            remainder = rest;
+            continue;
         }
+        if let Some(rest) = remainder.strip_prefix("&gt;") {
+            out.push('>');
+            remainder = rest;
+            continue;
+        }
+
+        #[allow(clippy::expect_used)]
+        // .expect since we've already had a earlier check on the length with the if statement
+        let c = remainder
+            .chars()
+            .next()
+            .expect("remainder is non-empty, so it has a first char");
         out.push(c);
-        i += 1;
+        remainder = &remainder[c.len_utf8()..];
     }
     out
 }
