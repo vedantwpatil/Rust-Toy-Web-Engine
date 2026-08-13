@@ -15,7 +15,7 @@ fn text_from_tokens(tokens: &[HtmlBody]) -> String {
 
 #[test]
 fn test_url_parses_http() {
-    let url = Url::new("http://www.google.com/");
+    let url = Url::new("http://www.google.com/").unwrap();
     assert_eq!(url.scheme, "http");
     assert_eq!(url.host, "www.google.com");
     assert_eq!(url.path, "/");
@@ -23,7 +23,7 @@ fn test_url_parses_http() {
 
 #[test]
 fn test_url_parses_https() {
-    let url = Url::new("https://browser.engineering/");
+    let url = Url::new("https://browser.engineering/").unwrap();
     assert_eq!(url.scheme, "https");
     assert_eq!(url.host, "browser.engineering");
     assert_eq!(url.path, "/");
@@ -31,7 +31,7 @@ fn test_url_parses_https() {
 
 #[test]
 fn test_url_parses_path() {
-    let url = Url::new("https://example.com/foo/bar");
+    let url = Url::new("https://example.com/foo/bar").unwrap();
     assert_eq!(url.scheme, "https");
     assert_eq!(url.host, "example.com");
     assert_eq!(url.path, "/foo/bar");
@@ -39,7 +39,7 @@ fn test_url_parses_path() {
 
 #[test]
 fn test_url_parses_file_scheme() {
-    let url = Url::new("file:///tmp/test.html");
+    let url = Url::new("file:///tmp/test.html").unwrap();
     assert_eq!(url.scheme, "file");
     assert_eq!(url.host, "");
     assert_eq!(url.path, "/tmp/test.html");

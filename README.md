@@ -35,7 +35,8 @@ Some of the things I've been enjoying so far are
 
 - Matches
   - They feel really intuitive and nice despite other languages having support for cases they feel like they flow better in rust
-- The result option type
+- The result and option types
   - They're really nice to be able to determine which parts of the code can fail and help made error management simple/clean
+  - They force me to think about the code more in states and how data flows through the program and how logic transforms it state to state
 
 So far been really enjoying it in comparison to the python implementation because I feel like I know more what is going on. The rust implementation forces me to think more about what I'm doing where in the python solution there's more of a general faith rather than understanding that it'll work

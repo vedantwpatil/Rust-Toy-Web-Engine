@@ -1,5 +1,4 @@
 use eframe::egui;
-use egui::text_selection::text_cursor_state;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::collections::HashMap;
@@ -10,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 
 static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
-// Gui client
+// GUI client
 struct BrowserApp {
     url: String,
     tokens: Vec<HtmlBody>,
@@ -20,7 +19,7 @@ struct BrowserApp {
 
 impl Default for BrowserApp {
     fn default() -> Self {
-        BrowserApp {
+        Self {
             url: "https://browser.engineering/".to_owned(),
             tokens: Vec::new(),
             fonts_loaded: false,
@@ -31,17 +30,24 @@ impl Default for BrowserApp {
 
 impl BrowserApp {
     fn new() -> Self {
-        let mut app = BrowserApp::default();
+        let mut app = Self::default();
         let url = app.url.clone();
         app.navigate(&url);
         app
     }
 
     fn navigate(&mut self, url_str: &str) {
-        let url = Url::new(url_str);
+        let url = match Url::new(url_str) {
+            Ok(url) => url,
+            Err(e) => {
+                self.tokens = vec![HtmlBody::Text(format!("Error: {e}"))];
+                return;
+            }
+        };
+
         match load(&url, &mut self.connection_cache) {
             Ok(tokens) => self.tokens = tokens,
-            Err(e) => self.tokens = vec![HtmlBody::Text(format!("Error: {}", e))],
+            Err(e) => self.tokens = vec![HtmlBody::Text(format!("Error: {e}"))],
         }
     }
 }
@@ -231,8 +237,8 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(width: f32) -> Self {
-        Layout {
+    const fn new(width: f32) -> Self {
+        Self {
             display_list: Vec::new(),
             line: Vec::new(),
             cursor_x: HSTEP,
@@ -272,7 +278,7 @@ impl Layout {
             .map(|(_, _, b, i, s)| ctx.fonts_mut(|f| f.row_height(&font_id_for(*b, *i, *s))) * 0.8)
             .fold(0.0_f32, f32::max);
 
-        let baseline = self.cursor_y + 1.25 * max_ascent;
+        let baseline = 1.25f32.mul_add(max_ascent, self.cursor_y);
 
         let max_descent = line
             .iter()
@@ -291,7 +297,7 @@ impl Layout {
             });
         }
 
-        self.cursor_y = baseline + 1.25 * max_descent;
+        self.cursor_y = 1.25f32.mul_add(max_descent, baseline);
         self.cursor_x = HSTEP;
     }
 
@@ -339,8 +345,10 @@ fn layout(tokens: &[HtmlBody], ctx: &egui::Context, width: f32) -> Vec<DisplayIt
 fn get_tls_config() -> Arc<ClientConfig> {
     TLS_CONFIG
         .get_or_init(|| {
-            let root_store =
-                RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let root_store = webpki_roots::TLS_SERVER_ROOTS
+                .iter()
+                .cloned()
+                .collect::<RootCertStore>();
             let config = ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
@@ -361,6 +369,7 @@ enum BodyEncoding {
     ContentLength(usize),
     Chunked,
 }
+
 impl Read for NetworkStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
@@ -401,21 +410,22 @@ struct Url {
 }
 
 impl Url {
-    fn new(input: &str) -> Self {
+    fn new(input: &str) -> std::io::Result<Self> {
         let (scheme, rest) = input.split_once("://").unwrap_or(("", input));
         let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
         let (host, port) = if let Some((h, p)) = host.split_once(':') {
-            (h, Some(p.parse::<u16>().unwrap_or(80)))
+            let port = p.parse::<u16>().map_err(std::io::Error::other)?;
+            (h, Some(port))
         } else {
             (host, None)
         };
 
-        Self {
+        Ok(Self {
             scheme: scheme.to_string(),
             host: host.to_string(),
-            path: format!("/{}", path),
+            path: format!("/{path}"),
             port,
-        }
+        })
     }
 
     // Originally was going to do a one to one converstion but ran into issues with internet protocols so there are slight modifications
@@ -428,7 +438,7 @@ impl Url {
         if self.scheme == "file" {
             let path = &self.path;
 
-            println!("Opening local file: {}", path);
+            println!("Opening local file: {path}");
             let file = File::open(path)?;
 
             let len = file.metadata()?.len() as usize;
@@ -443,7 +453,7 @@ impl Url {
 
         self.send_request(stream.get_mut())?;
 
-        let content_length = self.parse_response_headers(&mut stream)?;
+        let content_length = parse_response_headers(&mut stream)?;
 
         Ok((stream, content_length))
     }
@@ -497,49 +507,46 @@ impl Url {
 
         writer.flush()
     }
+}
 
-    fn parse_response_headers(
-        &self,
-        reader: &mut BufReader<NetworkStream>,
-    ) -> std::io::Result<BodyEncoding> {
-        let mut line = String::new();
-        let mut is_chunked = false;
+fn parse_response_headers(reader: &mut BufReader<NetworkStream>) -> std::io::Result<BodyEncoding> {
+    let mut line = String::new();
+    let mut is_chunked = false;
 
-        // Read Status Line (e.g., "HTTP/1.1 200 OK")
+    // Read Status Line (e.g., "HTTP/1.1 200 OK")
+    reader.read_line(&mut line)?;
+
+    let mut content_length = 0;
+
+    // Loop through headers
+    loop {
+        line.clear();
         reader.read_line(&mut line)?;
 
-        let mut content_length = 0;
-
-        // Loop through headers
-        loop {
-            line.clear();
-            reader.read_line(&mut line)?;
-
-            // Empty line (\r\n) means end of headers
-            if line.trim().is_empty() {
-                break;
-            }
-
-            if let Some((key, value)) = line.split_once(':')
-                && key.trim().eq_ignore_ascii_case("content-length")
-            {
-                content_length = value.trim().parse().unwrap_or(0);
-
-                // Need to parse for transfer encoding headers to be able to properly render
-                // webpages, they're a different format
-            } else if let Some((key, value)) = line.split_once(':')
-                && key.trim().eq_ignore_ascii_case("transfer-encoding")
-                && value.trim().eq_ignore_ascii_case("chunked")
-            {
-                is_chunked = true;
-            }
+        // Empty line (\r\n) means end of headers
+        if line.trim().is_empty() {
+            break;
         }
 
-        if is_chunked {
-            Ok(BodyEncoding::Chunked)
-        } else {
-            Ok(BodyEncoding::ContentLength(content_length))
+        if let Some((key, value)) = line.split_once(':')
+            && key.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse().map_err(std::io::Error::other)?;
+
+            // Need to parse for transfer encoding headers to be able to properly render
+            // webpages, they're a different format
+        } else if let Some((key, value)) = line.split_once(':')
+            && key.trim().eq_ignore_ascii_case("transfer-encoding")
+            && value.trim().eq_ignore_ascii_case("chunked")
+        {
+            is_chunked = true;
         }
+    }
+
+    if is_chunked {
+        Ok(BodyEncoding::Chunked)
+    } else {
+        Ok(BodyEncoding::ContentLength(content_length))
     }
 }
 
