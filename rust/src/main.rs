@@ -394,6 +394,7 @@ impl Layout {
                         self.flush(ctx);
                         self.center = false;
                     }
+                    "small" => self.size -= 2.0,
                     "/small" => self.size += 2.0,
                     "big" => self.size += 4.0,
                     "/big" => self.size -= 4.0,
