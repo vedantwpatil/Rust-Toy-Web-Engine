@@ -9,11 +9,18 @@ use std::sync::{Arc, OnceLock};
 
 static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
+// TODO: every fallible fn in this file returns std::io::Result, including
+// non-IO failures (bad URL port, malformed chunk-size, TLS handshake). Deferred —
+// project-wide signature change, no caller branches on error kind yet. Revisit on
+// module split or when a caller needs to distinguish failure kinds. See docs/OPTIMIZATIONS.md #21.
+
 // GUI client
 struct BrowserApp {
     url: String,
     tokens: Vec<HtmlBody>,
     fonts_loaded: bool,
+    // TODO: keyed on hostname alone — wrong scheme/port reuses a cached
+    // connection. Fix shape: ConnKey { scheme, host, port } struct. See docs/OPTIMIZATIONS.md #3.
     connection_cache: HashMap<String, BufReader<NetworkStream>>,
 }
 
@@ -28,6 +35,8 @@ impl Default for BrowserApp {
     }
 }
 
+// App setup (assets and client)
+
 impl BrowserApp {
     fn new() -> Self {
         let mut app = Self::default();
@@ -36,6 +45,8 @@ impl BrowserApp {
         app
     }
 
+    // TODO: three call sites do `self.url.clone()` before calling this — low
+    // priority, worth fixing only if this fn's signature changes anyway. See docs/OPTIMIZATIONS.md #10.
     fn navigate(&mut self, url_str: &str) {
         let url = match Url::new(url_str) {
             Ok(url) => url,
@@ -52,9 +63,12 @@ impl BrowserApp {
     }
 }
 
-pub fn install_fonts(ctx: &egui::Context) {
+fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
+    // TODO: 5 near-identical insert blocks below — collapse to one loop over
+    // an array of (name, bytes), same shape as the families loop further down.
+    // See docs/OPTIMIZATIONS.md #8.
     fonts.font_data.insert(
         "TimesNewRoman".to_owned(),
         Arc::new(egui::FontData::from_static(include_bytes!(
@@ -90,6 +104,9 @@ pub fn install_fonts(ctx: &egui::Context) {
         ))),
     );
 
+    // TODO: bare .unwrap() on an Option that's unreachable in practice
+    // (egui always populates Proportional) but undocumented — either .expect("...") or
+    // handle None, and add a # Panics doc section either way. See docs/OPTIMIZATIONS.md #11 #12.
     let proportional = fonts
         .families
         .get_mut(&egui::FontFamily::Proportional)
@@ -111,6 +128,8 @@ pub fn install_fonts(ctx: &egui::Context) {
 
     ctx.set_fonts(fonts);
 }
+
+// Rendering the app and it's assets
 
 impl eframe::App for BrowserApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -139,6 +158,8 @@ impl eframe::App for BrowserApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let mut scroll_delta = egui::Vec2::ZERO;
 
+            // TODO: clones the whole InputState every frame just to read
+            // 4 bools — move the checks below inside this closure instead. See docs/OPTIMIZATIONS.md #4 #13.
             let input = ctx.input(|i| i.clone());
             if input.key_pressed(egui::Key::ArrowDown) {
                 scroll_delta.y -= 40.0;
@@ -210,6 +231,11 @@ struct DisplayItem {
     size: f32,
 }
 
+fn measure(text: &str, bold: bool, italic: bool, size: f32, ctx: &egui::Context) -> f32 {
+    let font_id = font_id_for(bold, italic, size);
+    ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
+}
+
 fn font_id_for(bold: bool, italic: bool, size: f32) -> egui::FontId {
     let family = match (bold, italic) {
         (true, true) => egui::FontFamily::Name("TimesNewRomanBoldItalic".into()),
@@ -220,16 +246,32 @@ fn font_id_for(bold: bool, italic: bool, size: f32) -> egui::FontId {
     egui::FontId::new(size, family)
 }
 
-fn measure(text: &str, bold: bool, italic: bool, size: f32, ctx: &egui::Context) -> f32 {
-    let font_id = font_id_for(bold, italic, size);
-    ctx.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font_id, c)).sum())
+// (x, word, bold, italic, size) — y deferred to flush
+struct LineItem {
+    x: f32,
+    word: String,
+    bold: bool,
+    italic: bool,
+    size: f32,
 }
 
+impl LineItem {
+    const fn new(x: f32, word: String, bold: bool, italic: bool, size: f32) -> Self {
+        Self {
+            x,
+            word,
+            bold,
+            italic,
+            size,
+        }
+    }
+}
 struct Layout {
     display_list: Vec<DisplayItem>,
-    line: Vec<(f32, String, bool, bool, f32)>, // (x, word, bold, italic, size) — y deferred to flush
+    line: Vec<LineItem>,
     cursor_x: f32,
     cursor_y: f32,
+    center: bool,
     bold: bool,
     italic: bool,
     size: f32,
@@ -243,6 +285,7 @@ impl Layout {
             line: Vec::new(),
             cursor_x: HSTEP,
             cursor_y: VSTEP,
+            center: false,
             bold: false,
             italic: false,
             size: 16.0,
@@ -255,7 +298,7 @@ impl Layout {
         if self.cursor_x + word_width >= self.width - HSTEP {
             self.flush(ctx);
         }
-        self.line.push((
+        self.line.push(LineItem::new(
             self.cursor_x,
             word.to_string(),
             self.bold,
@@ -273,27 +316,58 @@ impl Layout {
         }
         let line = std::mem::take(&mut self.line);
 
+        // TODO: row_height computed up to 3x per word across max_ascent,
+        // max_descent, and the placement loop below — one pass computing
+        // (ascent, descent) together and reusing it would do. See docs/OPTIMIZATIONS.md #5.
         let max_ascent = line
             .iter()
-            .map(|(_, _, b, i, s)| ctx.fonts_mut(|f| f.row_height(&font_id_for(*b, *i, *s))) * 0.8)
+            .map(|item| {
+                ctx.fonts_mut(|f| f.row_height(&font_id_for(item.bold, item.italic, item.size)))
+                    * 0.8
+            })
             .fold(0.0_f32, f32::max);
 
         let baseline = 1.25f32.mul_add(max_ascent, self.cursor_y);
 
         let max_descent = line
             .iter()
-            .map(|(_, _, b, i, s)| ctx.fonts_mut(|f| f.row_height(&font_id_for(*b, *i, *s))) * 0.2)
+            .map(|item| {
+                ctx.fonts_mut(|f| f.row_height(&font_id_for(item.bold, item.italic, item.size)))
+                    * 0.2
+            })
             .fold(0.0_f32, f32::max);
 
-        for (x, word, bold, italic, size) in line {
-            let ascent = ctx.fonts_mut(|f| f.row_height(&font_id_for(bold, italic, size))) * 0.8;
+        let center_offset = if self.center {
+            line.last().map_or(0.0, |last_word| {
+                let last_word_width = measure(
+                    &last_word.word,
+                    last_word.bold,
+                    last_word.italic,
+                    last_word.size,
+                    ctx,
+                );
+
+                let right_margin = last_word.x + last_word_width;
+                let left_margin = HSTEP;
+                let content_width = right_margin - left_margin;
+                let available_width = 2.0f32.mul_add(-HSTEP, self.width);
+                (available_width - content_width) / 2.0
+            })
+        } else {
+            0.0
+        };
+
+        for item in line {
+            let ascent = ctx
+                .fonts_mut(|f| f.row_height(&font_id_for(item.bold, item.italic, item.size)))
+                * 0.8;
             self.display_list.push(DisplayItem {
-                x,
+                x: item.x + center_offset,
                 y: baseline - ascent,
-                word,
-                bold,
-                italic,
-                size,
+                word: item.word,
+                bold: item.bold,
+                italic: item.italic,
+                size: item.size,
             });
         }
 
@@ -315,7 +389,11 @@ impl Layout {
                     "/b" => self.bold = false,
                     "i" => self.italic = true,
                     "/i" => self.italic = false,
-                    "small" => self.size -= 2.0,
+                    "h1 class=\"title\"" | "center" => self.center = true,
+                    "/h1" | "/center" => {
+                        self.flush(ctx);
+                        self.center = false;
+                    }
                     "/small" => self.size += 2.0,
                     "big" => self.size += 4.0,
                     "/big" => self.size -= 4.0,
@@ -365,6 +443,8 @@ enum NetworkStream {
 }
 
 // Allows us to accept the html body in chunks similar to how websites send them
+// TODO: tag + one usize, trivially Copy — derive Debug, Clone, Copy instead
+// of passing by value implicitly. See docs/OPTIMIZATIONS.md #17.
 enum BodyEncoding {
     ContentLength(usize),
     Chunked,
@@ -410,6 +490,9 @@ struct Url {
 }
 
 impl Url {
+    // TODO: name says infallible, Result says otherwise — rename to parse()
+    // or impl TryFrom<&str>. Also: missing "://" silently parses as scheme "" instead
+    // of erroring (input.split_once below). See docs/OPTIMIZATIONS.md #2.
     fn new(input: &str) -> std::io::Result<Self> {
         let (scheme, rest) = input.split_once("://").unwrap_or(("", input));
         let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
@@ -420,6 +503,8 @@ impl Url {
             (host, None)
         };
 
+        // TODO: to_string() here, .to_owned() everywhere else in this file for
+        // the same &str -> String conversion — pick one. See docs/OPTIMIZATIONS.md #9.
         Ok(Self {
             scheme: scheme.to_string(),
             host: host.to_string(),
@@ -441,6 +526,8 @@ impl Url {
             println!("Opening local file: {path}");
             let file = File::open(path)?;
 
+            // TODO: silent truncation on 32-bit targets — usize::try_from(...)
+            // .map_err(...)? instead of `as usize`. See docs/OPTIMIZATIONS.md #15.
             let len = file.metadata()?.len() as usize;
 
             return Ok((
@@ -564,6 +651,10 @@ fn lex(reader: &mut BufReader<NetworkStream>, encoding: BodyEncoding) -> std::io
             Ok(String::from_utf8_lossy(&buffer).to_string())
         }
         BodyEncoding::Chunked => {
+            // TODO: from_utf8_lossy runs per-chunk below — a multi-byte char
+            // split across a chunk boundary gets corrupted to U+FFFD on each side.
+            // Accumulate raw bytes across all chunks first, decode once at the end.
+            // See docs/OPTIMIZATIONS.md #20.
             let mut body = String::new();
             loop {
                 let mut size_line = String::new();
@@ -580,6 +671,9 @@ fn lex(reader: &mut BufReader<NetworkStream>, encoding: BodyEncoding) -> std::io
                 reader.read_exact(&mut chunk)?;
                 body.push_str(&String::from_utf8_lossy(&chunk));
 
+                // TODO: reads the trailing CRLF but never checks it's actually
+                // "\r\n" — malformed chunk framing surfaces several lines downstream as
+                // a confusing hex-parse failure instead of here. See docs/OPTIMIZATIONS.md #18.
                 let mut crlf = String::new();
                 reader.read_line(&mut crlf)?;
             }
@@ -608,6 +702,8 @@ fn strip_tags(text: &str) -> Vec<HtmlBody> {
 
     for c in text.chars() {
         if c == '<' {
+            // TODO: clone immediately followed by clear — std::mem::take(&mut
+            // buffer) moves instead of copying. See docs/OPTIMIZATIONS.md #7.
             if !in_tag && !buffer.is_empty() {
                 out.push(HtmlBody::Text(buffer.clone()));
                 buffer.clear();
@@ -615,6 +711,7 @@ fn strip_tags(text: &str) -> Vec<HtmlBody> {
             in_tag = true;
             buffer.push(c);
         } else if c == '>' {
+            // TODO: same clone-then-clear as above — std::mem::take instead.
             buffer.push(c);
             out.push(HtmlBody::Tag(buffer.clone()));
             buffer.clear();
