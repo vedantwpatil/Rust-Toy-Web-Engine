@@ -253,16 +253,18 @@ struct LineItem {
     bold: bool,
     italic: bool,
     size: f32,
+    width: f32,
 }
 
 impl LineItem {
-    const fn new(x: f32, word: String, bold: bool, italic: bool, size: f32) -> Self {
+    const fn new(x: f32, word: String, bold: bool, italic: bool, size: f32, width: f32) -> Self {
         Self {
             x,
             word,
             bold,
             italic,
             size,
+            width,
         }
     }
 }
@@ -304,6 +306,7 @@ impl Layout {
             self.bold,
             self.italic,
             self.size,
+            word_width,
         ));
         self.cursor_x += word_width + measure(" ", self.bold, self.italic, self.size, ctx);
     }
@@ -339,15 +342,7 @@ impl Layout {
 
         let center_offset = if self.center {
             line.last().map_or(0.0, |last_word| {
-                let last_word_width = measure(
-                    &last_word.word,
-                    last_word.bold,
-                    last_word.italic,
-                    last_word.size,
-                    ctx,
-                );
-
-                let right_margin = last_word.x + last_word_width;
+                let right_margin = last_word.x + last_word.width;
                 let left_margin = HSTEP;
                 let content_width = right_margin - left_margin;
                 let available_width = 2.0f32.mul_add(-HSTEP, self.width);
